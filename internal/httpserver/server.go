@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Ryttis/devatlas/internal/collect/git"
 	"github.com/Ryttis/devatlas/internal/version"
 )
 
@@ -20,6 +21,7 @@ type Server struct {
 	cfg      Config
 	log      *slog.Logger
 	registry RegistrySource
+	git      GitObserver
 	http     *http.Server
 	started  time.Time
 }
@@ -38,6 +40,7 @@ func New(cfg Config, src RegistrySource, log *slog.Logger) (*Server, error) {
 		log = slog.Default()
 	}
 	s := &Server{cfg: cfg, log: log, registry: src}
+	s.git = git.NewCollector(git.Options{Logger: log})
 	s.http = &http.Server{
 		Handler: s.routes(),
 		// Timeouts protect the process from slow or stalled clients. The
@@ -51,6 +54,9 @@ func New(cfg Config, src RegistrySource, log *slog.Logger) (*Server, error) {
 	}
 	return s, nil
 }
+
+// SetGitObserver replaces the Git collector. It must be called before Listen.
+func (s *Server) SetGitObserver(o GitObserver) { s.git = o }
 
 // Listen opens the TCP listener on the configured loopback address. A port
 // that is already occupied is reported as an *AddrInUseError so callers can

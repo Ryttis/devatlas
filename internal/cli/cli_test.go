@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -295,4 +296,48 @@ func mustCanonical(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return c
+}
+
+func TestListShowsGitObservations(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	cfg := filepath.Join(root, "registrations.yaml")
+	t.Setenv("DEVATLAS_CONFIG", cfg)
+	repo := filepath.Join(root, "repo")
+	os.Mkdir(repo, 0o755)
+	for _, args := range [][]string{{"-c", "init.defaultBranch=main", "init", "-q"}, {"remote", "add", "origin", "git@github.com:o/r.git"}} {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	plain := filepath.Join(root, "plain")
+	os.Mkdir(plain, 0o755)
+	if code, _, errOut := runCLI(t, "add", "-project", "p", "-name", "P", repo); code != ExitOK {
+		t.Fatal(errOut)
+	}
+	if code, _, errOut := runCLI(t, "add", "-project", "p", plain); code != ExitOK {
+		t.Fatal(errOut)
+	}
+
+	code, out, errOut := runCLI(t, "list")
+	if code != ExitOK {
+		t.Fatalf("list: %d %s", code, errOut)
+	}
+	for _, want := range []string{"GIT", "BRANCH", "REMOTES", "ok", "main (no commits)", "origin=github.com[github]", "not_git", "git not_git: not a Git repository", "observed now by running git locally", "regardless of Git state"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list output missing %q:\n%s", want, out)
+		}
+	}
+	code, out, _ = runCLI(t, "list", "-json")
+	if code != ExitOK || !strings.Contains(out, `"collection"`) || !strings.Contains(out, `"status": "ok"`) || !strings.Contains(out, `"status": "not_git"`) {
+		t.Fatalf("list -json:\n%s", out)
+	}
+	code, out, _ = runCLI(t, "list", "-no-git")
+	if code != ExitOK || !strings.Contains(out, "not observed") || strings.Contains(out, "main") {
+		t.Fatalf("list -no-git:\n%s", out)
+	}
 }

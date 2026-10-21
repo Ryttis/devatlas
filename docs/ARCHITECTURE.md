@@ -1,8 +1,8 @@
 # DevAtlas architecture
 
-Status: slice 02 (project and checkout registration). This document describes
-what exists now and the boundaries later slices are expected to respect.
-Anything listed under "planned" is not implemented.
+Status: slice 03 (read-only Git checkout observations). This document
+describes what exists now and the boundaries later slices are expected to
+respect. Anything listed under "planned" is not implemented.
 
 ## Purpose
 
@@ -24,8 +24,13 @@ internal/registry            domain model: Project, Checkout, Registry; identity
 internal/registryfile        persistence: versioned YAML file under the user config
                              directory, atomic writes, flock-based updates, path
                              resolution (-config flag, DEVATLAS_CONFIG, default)
+internal/collect/git         first collector adapter: runs the local git command
+                             read-only with deadlines, output caps, process-group
+                             isolation, and a sanitised remote model; returns an
+                             Observation per path with status, source, and time
 internal/httpserver          loopback listener, timeouts, graceful shutdown,
-                             GET /health, GET /api/projects, GET / (html/template)
+                             GET /health, GET /api/projects, GET / (html/template);
+                             ObserveProjects joins registrations with observations
 internal/version             version string, VCS commit from Go build info
 ```
 
@@ -34,13 +39,16 @@ Dependency direction is strictly inward:
 ```text
 cmd/devatlas -> cli -> httpserver -> registryfile -> registry -> (stdlib)
                   \-> registryfile      \-> registry      \-> yaml
-                  \-> registry          \-> version
+                  \-> registry          \-> collect/git
+                  \-> collect/git       \-> version
 ```
 
 `httpserver` depends on `registryfile` only through the `RegistrySource`
-interface (`Load`, `Path`), which the file store satisfies. The one external
-module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The `internal/`
-prefix keeps every package private to this module.
+interface (`Load`, `Path`) and on the Git collector only through
+`GitObserver` (`CollectAll`), so tests substitute fakes for both.
+`collect/git` depends on nothing else in this module. The one external
+module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The
+`internal/` prefix keeps every package private to this module.
 
 ### Design decisions already in force
 
@@ -86,6 +94,24 @@ prefix keeps every package private to this module.
   only on Linux/WSL with local filesystem locking and rename semantics.
 - **Read-only HTTP.** The server exposes GET only. Registrations change
   through the CLI, which is also where the lock and validation live.
+- **Observations are per request and self-describing.** `ObserveProjects`
+  collects Git observations for the checkouts of one response under the
+  request context, so a disconnecting client cancels running commands.
+  Each observation carries `status`, `source`, `collected_at`, and a safe
+  `reason`; the response says `collection.mode = current_request`. Nothing
+  is cached, stored, or refreshed in the background yet.
+- **Git success does not imply runtime health.** The Git observation and the
+  runtime status are separate fields; runtime stays `unknown` with a "not
+  collected" reason until Docker, port, and HTTP collectors exist.
+- **The Git adapter is strictly read-only and bounded.** It runs a fixed
+  program with separate arguments (no shell), disables prompts, optional
+  locks, the file-system monitor, and hook paths, strips repository
+  redirecting environment variables, bounds time, output, and concurrency,
+  kills the process group on cancellation, and sanitises remote URLs before
+  they enter the observation. Failure reasons shown to users are classified
+  text; raw stderr goes to the log only. It never fetches, checks out,
+  stages, commits, or edits configuration, and it never groups projects by
+  remote.
 
 ## Intended package layout and adapter boundaries (planned)
 
@@ -104,9 +130,10 @@ internal/store        SQLite index and observation history. Rebuildable from
                       registrations, manifests, and fresh observations;
                       never the source of truth for registrations or
                       documents.
-internal/collect      collector interfaces plus one adapter per source:
-  collect/git         branch, HEAD, dirty/untracked counts, worktrees,
-                      remote identification with credentials stripped.
+internal/collect      one adapter per source behind a small interface:
+  collect/git         (exists) branch, HEAD, change counts, worktrees,
+                      sanitised remotes. Planned: ahead/behind from local
+                      remote refs, labelled as such, never fetching.
   collect/docker      Compose project metadata, container state, health,
                       restart count, published host ports. Reports
                       `error`/`unknown` with the last successful time when
@@ -146,6 +173,12 @@ request, checkout identity (symlinks, relative paths, worktrees), project
 name rules, safe removal, persistence across reloads, malformed-file
 handling and recovery without exposing YAML values, concurrent updates from
 separate CLI processes, alias rejection, bounded lock waits, HTML escaping of
-project names, and the read-only API. Later slices add tests for port-conflict logic, status and
-staleness modelling, and secret exclusion, using controlled fixtures for Git
-and Docker, plus at least one flow verified against a real local project.
+project names and branch names, and the read-only API. The Git adapter is
+tested against real temporary repositories (unborn, clean, staged, unstaged,
+renamed, conflicted, detached, two worktrees, subdirectory, awkward file
+names) and against scripted fake git executables for timeouts, cancellation,
+failure isolation, output limits, and classified errors; credential
+exclusion is asserted on the JSON, the HTML, and the log. Later slices add
+tests for port-conflict logic and status and staleness modelling, using
+controlled fixtures for Docker, plus at least one flow verified against a
+real local project.

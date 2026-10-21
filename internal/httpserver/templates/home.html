@@ -6,7 +6,7 @@
   <title>DevAtlas</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }
-    body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+    body { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; }
     h1 { margin-bottom: 0; }
     .muted { opacity: 0.7; }
     code { font-family: ui-monospace, monospace; }
@@ -15,6 +15,7 @@
     table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
     th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.4); vertical-align: top; }
     .warn { border: 1px solid #c60; padding: 0.5rem 0.75rem; border-radius: 4px; }
+    .small { font-size: 0.85rem; }
   </style>
 </head>
 <body>
@@ -35,14 +36,15 @@
   <section>
     <h2>Registered projects</h2>
     <p class="muted">Source: <code>{{.RegistryFile}}</code>, read at <code>{{.Now.Format "2006-01-02T15:04:05Z07:00"}}</code>.
-      Runtime status has not been collected: this build records registrations only, so every checkout is <code>unknown</code>.</p>
+      Git columns were collected for this page view by running <code>git</code> locally; nothing is cached.
+      Runtime status has not been collected: Docker, ports, and application checks are not implemented, so every checkout is <code>unknown</code> regardless of its Git state.</p>
     {{if .RegistryError}}
     <p class="warn">The registration file could not be loaded and was left untouched: <code>{{.RegistryError}}</code></p>
     {{else if not .Registrations.Projects}}
     <p>No projects registered yet. Register one with <code>devatlas add -project &lt;id&gt; -name "&lt;name&gt;" &lt;directory&gt;</code>.</p>
     {{else}}
     <table>
-      <thead><tr><th>Project</th><th>Checkout ID</th><th>Path</th><th>Directory</th><th>Runtime</th></tr></thead>
+      <thead><tr><th>Project</th><th>Checkout ID</th><th>Path</th><th>Directory</th><th>Git</th><th>Branch</th><th>Commit</th><th>Changes</th><th>Remotes</th><th>Runtime</th></tr></thead>
       <tbody>
       {{range .Registrations.Projects}}{{$p := .}}
         {{range .Checkouts}}
@@ -51,13 +53,26 @@
           <td><code>{{.ID}}</code></td>
           <td><code>{{.Path}}</code></td>
           <td>{{.PathStatus}}</td>
+          {{with .Git}}
+          <td>{{.Status}}{{if .Reason}}<br><span class="muted small">{{.Reason}}</span>{{end}}<br><span class="muted small">at {{.CollectedAt.Format "15:04:05Z07:00"}}</span></td>
+          {{with .Repository}}
+          <td>{{if .Head.Detached}}<em>detached</em>{{else}}{{.Head.Branch}}{{end}}{{if .Head.Unborn}} <span class="muted small">(no commits)</span>{{end}}{{if .LinkedWorktree}}<br><span class="muted small">linked worktree</span>{{end}}{{if not .PathIsWorktreeRoot}}<br><span class="muted small">subdirectory of {{.WorktreeRoot}}</span>{{end}}</td>
+          <td><code>{{if .Head.Commit}}{{slice .Head.Commit 0 12}}{{else}}&ndash;{{end}}</code></td>
+          <td>{{with .Changes}}{{if and (eq .Tracked 0) (eq .Untracked 0)}}clean{{else}}{{.Tracked}} tracked ({{.Staged}} staged, {{.Unstaged}} unstaged{{if .Conflicted}}, {{.Conflicted}} conflicted{{end}}), {{.Untracked}} untracked{{end}}{{end}}</td>
+          <td class="small">{{range .Remotes}}{{.Name}} ({{.Role}}): {{if .Host}}{{.Host}}{{else}}local{{end}} <span class="muted">[{{.Provider}}]</span><br>{{else}}<span class="muted">none</span>{{end}}</td>
+          {{else}}
+          <td colspan="4" class="muted">&ndash;</td>
+          {{end}}
+          {{end}}
           <td>{{.Runtime.Status}}</td>
         </tr>
         {{end}}
       {{end}}
       </tbody>
     </table>
-    <p class="muted">JSON: <a href="/api/projects"><code>GET /api/projects</code></a>. "Directory" is a stat of the path at page render time; "Runtime" is always <code>unknown</code> in this build.</p>
+    <p class="muted">JSON: <a href="/api/projects"><code>GET /api/projects</code></a>. "Directory" is a stat of the path at page render time.
+      "Changes" counts tracked paths with staged, unstaged, or unmerged changes and untracked files, as reported by <code>git status --porcelain=v2 --untracked-files=all</code>.
+      Remote URLs are shown as host and provider only; credentials are removed before anything is displayed or logged. "Runtime" is always <code>unknown</code> in this build.</p>
     {{end}}
   </section>
 

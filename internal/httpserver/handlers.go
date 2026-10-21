@@ -40,18 +40,19 @@ type Scope struct {
 // CurrentScope returns the implementation status of this build.
 func CurrentScope() Scope {
 	return Scope{
-		Slice: "02 — project and checkout registration",
+		Slice: "03 — read-only Git checkout observations",
 		Implemented: []string{
 			"devatlas CLI: version, serve, add, list, remove",
 			"loopback-only HTTP server with configurable port and graceful shutdown",
 			"GET /health JSON endpoint",
 			"registration of existing directories as checkouts of explicitly named projects, persisted in a YAML file under the user configuration directory",
 			"GET /api/projects (read-only) and the registration table on this page, reloaded from the file on every request",
+			"read-only Git observation per checkout, collected for each request by running the local git command: worktree root, branch or detached HEAD, commit, change counts, sanitised remotes",
 		},
 		Deferred: []string{
 			"SQLite index and observation history",
 			"project-registry.yaml manifest loading and directory scanning",
-			"Git checkout and worktree collection",
+			"ahead/behind information against remote refs",
 			"Docker Compose and container status collection",
 			"port-conflict analysis",
 			"HTTP application checks",
@@ -117,7 +118,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		s.log.Warn(registryLoadError)
 		data.RegistryError = registryLoadError
 	} else {
-		resp := BuildProjectsResponse(reg.Views(), s.registry.Path(), now)
+		resp := ObserveProjects(r.Context(), reg.Views(), s.registry.Path(), now, s.git)
 		data.Registrations = &resp
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

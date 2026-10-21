@@ -145,6 +145,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 	logger.Info("using registration file", "path", store.Path())
+	logger.Info("git observations are collected per request by running git locally; nothing is cached")
 
 	srv, err := httpserver.New(cfg, store, logger)
 	if err != nil {
@@ -177,6 +178,11 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 
 // usageError maps a flag parsing result to an exit code. The flag package has
 // already printed the error and usage text to stderr.
+// slogTo returns a warn-level text logger for command-line use.
+func slogTo(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelWarn}))
+}
+
 func usageError(err error) int {
 	if errors.Is(err, flag.ErrHelp) {
 		return ExitOK

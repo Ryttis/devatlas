@@ -1,12 +1,14 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/Ryttis/devatlas/internal/collect/git"
 	"github.com/Ryttis/devatlas/internal/registry"
 )
 
@@ -18,22 +20,42 @@ type RegistrySource interface {
 	Path() string
 }
 
-// Status vocabulary from the brief. Only "unknown" is produced in this build
-// because no runtime collection exists yet.
+// GitObserver collects Git observations for checkout paths. The real
+// implementation is git.Collector; tests substitute fakes.
+type GitObserver interface {
+	CollectAll(ctx context.Context, paths []string) map[string]git.Observation
+}
+
+// Status vocabulary from the brief. Only "unknown" is produced for runtime
+// status in this build because no Docker, port, or HTTP collection exists.
 const (
 	StatusUnknown = "unknown"
 
-	// NotCollectedReason explains every "unknown" status in this build.
-	NotCollectedReason = "not collected: runtime status collection (Git, Docker, ports, HTTP checks) is not implemented in this build"
+	// NotCollectedReason explains every "unknown" runtime status in this
+	// build. A successful Git observation says nothing about containers or
+	// application health.
+	NotCollectedReason = "not collected: runtime status collection (Docker, ports, HTTP checks) is not implemented in this build; Git state does not imply runtime health"
+
+	// CollectionModeCurrentRequest marks observations as produced for the
+	// response that carries them.
+	CollectionModeCurrentRequest = "current_request"
+	collectionNote               = "Git observations were collected by running git locally while producing this response; nothing is cached, stored, or refreshed in the background"
 )
 
 // ProjectsResponse is the body of GET /api/projects.
 type ProjectsResponse struct {
-	SchemaVersion int          `json:"schema_version"`
-	GeneratedAt   time.Time    `json:"generated_at"`
-	RegistryFile  string       `json:"registry_file"`
-	RuntimeStatus StatusNote   `json:"runtime_status"`
-	Projects      []ProjectDTO `json:"projects"`
+	SchemaVersion int            `json:"schema_version"`
+	GeneratedAt   time.Time      `json:"generated_at"`
+	RegistryFile  string         `json:"registry_file"`
+	Collection    CollectionNote `json:"collection"`
+	RuntimeStatus StatusNote     `json:"runtime_status"`
+	Projects      []ProjectDTO   `json:"projects"`
+}
+
+// CollectionNote states how the observations in a response were obtained.
+type CollectionNote struct {
+	Mode string `json:"mode"`
+	Note string `json:"note"`
 }
 
 // StatusNote states a status together with why it was assigned.
@@ -50,27 +72,49 @@ type ProjectDTO struct {
 	Checkouts    []CheckoutDTO `json:"checkouts"`
 }
 
-// CheckoutDTO is one registered directory. PathExists is the only observed
-// fact in this build: a stat of the directory at GeneratedAt. It is nil when
-// stat fails; PathStatus distinguishes absence, a non-directory, and errors.
+// CheckoutDTO is one registered directory with the facts observed for this
+// response: a stat of the directory (PathExists is nil when stat fails;
+// PathStatus distinguishes absence, a non-directory, and errors) and a Git
+// observation. Runtime stays unknown regardless of the Git result.
 type CheckoutDTO struct {
-	ID           string     `json:"id"`
-	Path         string     `json:"path"`
-	RegisteredAt time.Time  `json:"registered_at"`
-	PathExists   *bool      `json:"path_exists"`
-	PathStatus   string     `json:"path_status"`
-	CheckedAt    time.Time  `json:"checked_at"`
-	Runtime      StatusNote `json:"runtime"`
+	ID           string          `json:"id"`
+	Path         string          `json:"path"`
+	RegisteredAt time.Time       `json:"registered_at"`
+	PathExists   *bool           `json:"path_exists"`
+	PathStatus   string          `json:"path_status"`
+	CheckedAt    time.Time       `json:"checked_at"`
+	Git          git.Observation `json:"git"`
+	Runtime      StatusNote      `json:"runtime"`
 }
 
-// BuildProjectsResponse converts registry views into the API shape. It is
-// shared by the JSON endpoint, the HTML page, and `devatlas list -json`.
-func BuildProjectsResponse(views []registry.ProjectView, registryFile string, now time.Time) ProjectsResponse {
+// ObserveProjects collects Git observations for every checkout in views and
+// builds the response. ctx bounds the collection: cancelling it (for example
+// when the HTTP client disconnects) stops running git commands. It is shared
+// by the JSON endpoint, the HTML page, and `devatlas list`.
+func ObserveProjects(ctx context.Context, views []registry.ProjectView, registryFile string, now time.Time, observer GitObserver) ProjectsResponse {
+	var paths []string
+	for _, v := range views {
+		for _, c := range v.Checkouts {
+			paths = append(paths, c.Path)
+		}
+	}
+	var observations map[string]git.Observation
+	if observer != nil && len(paths) > 0 {
+		observations = observer.CollectAll(ctx, paths)
+	}
+	return BuildProjectsResponse(views, registryFile, now, observations)
+}
+
+// BuildProjectsResponse converts registry views and already collected Git
+// observations (keyed by checkout path) into the API shape. A checkout
+// without an observation is reported as not observed.
+func BuildProjectsResponse(views []registry.ProjectView, registryFile string, now time.Time, observations map[string]git.Observation) ProjectsResponse {
 	now = now.UTC().Truncate(time.Second)
 	resp := ProjectsResponse{
 		SchemaVersion: registry.SchemaVersion,
 		GeneratedAt:   now,
 		RegistryFile:  registryFile,
+		Collection:    CollectionNote{Mode: CollectionModeCurrentRequest, Note: collectionNote},
 		RuntimeStatus: StatusNote{Status: StatusUnknown, Reason: NotCollectedReason},
 		Projects:      []ProjectDTO{},
 	}
@@ -78,6 +122,10 @@ func BuildProjectsResponse(views []registry.ProjectView, registryFile string, no
 		p := ProjectDTO{ID: v.ID, Name: v.Name, RegisteredAt: v.RegisteredAt, Checkouts: []CheckoutDTO{}}
 		for _, c := range v.Checkouts {
 			exists, status := observeDir(c.Path)
+			obs, ok := observations[c.Path]
+			if !ok {
+				obs = git.Observation{Status: git.StatusError, Source: git.Source, CollectedAt: now, Reason: "not observed"}
+			}
 			p.Checkouts = append(p.Checkouts, CheckoutDTO{
 				ID:           c.ID,
 				Path:         c.Path,
@@ -85,6 +133,7 @@ func BuildProjectsResponse(views []registry.ProjectView, registryFile string, no
 				PathExists:   exists,
 				PathStatus:   status,
 				CheckedAt:    now,
+				Git:          obs,
 				Runtime:      StatusNote{Status: StatusUnknown, Reason: NotCollectedReason},
 			})
 		}
@@ -130,7 +179,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		_ = enc.Encode(errorResponse{Error: registryLoadError})
 		return
 	}
-	resp := BuildProjectsResponse(reg.Views(), s.registry.Path(), time.Now())
+	resp := ObserveProjects(r.Context(), reg.Views(), s.registry.Path(), time.Now(), s.git)
 	if err := enc.Encode(resp); err != nil {
 		s.log.Warn("write projects response", "err", err)
 	}
