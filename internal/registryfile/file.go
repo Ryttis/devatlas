@@ -105,7 +105,14 @@ func resolveDir(path string) (string, error) {
 	}
 	// Only recurse through absent components, never through a dangling link
 	// or an inaccessible component (which must remain an error).
-	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+	_, statErr := os.Lstat(path)
+	if statErr == nil {
+		// The component appeared between the two calls, typically because a
+		// concurrent devatlas process created the configuration directory.
+		// Resolve again instead of reporting the stale absence.
+		return filepath.EvalSymlinks(path)
+	}
+	if !errors.Is(statErr, os.ErrNotExist) {
 		return "", err
 	}
 	parent := filepath.Dir(path)
