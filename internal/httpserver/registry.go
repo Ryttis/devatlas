@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"time"
@@ -50,12 +51,14 @@ type ProjectDTO struct {
 }
 
 // CheckoutDTO is one registered directory. PathExists is the only observed
-// fact in this build: a stat of the directory at GeneratedAt.
+// fact in this build: a stat of the directory at GeneratedAt. It is nil when
+// stat fails; PathStatus distinguishes absence, a non-directory, and errors.
 type CheckoutDTO struct {
 	ID           string     `json:"id"`
 	Path         string     `json:"path"`
 	RegisteredAt time.Time  `json:"registered_at"`
-	PathExists   bool       `json:"path_exists"`
+	PathExists   *bool      `json:"path_exists"`
+	PathStatus   string     `json:"path_status"`
 	CheckedAt    time.Time  `json:"checked_at"`
 	Runtime      StatusNote `json:"runtime"`
 }
@@ -74,11 +77,13 @@ func BuildProjectsResponse(views []registry.ProjectView, registryFile string, no
 	for _, v := range views {
 		p := ProjectDTO{ID: v.ID, Name: v.Name, RegisteredAt: v.RegisteredAt, Checkouts: []CheckoutDTO{}}
 		for _, c := range v.Checkouts {
+			exists, status := observeDir(c.Path)
 			p.Checkouts = append(p.Checkouts, CheckoutDTO{
 				ID:           c.ID,
 				Path:         c.Path,
 				RegisteredAt: c.RegisteredAt,
-				PathExists:   dirExists(c.Path),
+				PathExists:   exists,
+				PathStatus:   status,
 				CheckedAt:    now,
 				Runtime:      StatusNote{Status: StatusUnknown, Reason: NotCollectedReason},
 			})
@@ -88,10 +93,25 @@ func BuildProjectsResponse(views []registry.ProjectView, registryFile string, no
 	return resp
 }
 
-func dirExists(path string) bool {
+// observeDir distinguishes absence from a failed observation. No error text
+// from the filesystem is needed in the public response.
+func observeDir(path string) (*bool, string) {
 	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	exists := false
+	if errors.Is(err, os.ErrNotExist) {
+		return &exists, "missing"
+	}
+	if err != nil {
+		return nil, "error"
+	}
+	if !info.IsDir() {
+		return &exists, "not a directory"
+	}
+	exists = true
+	return &exists, "present"
 }
+
+const registryLoadError = "cannot load registrations: configuration is invalid or unreadable; inspect the registration file locally"
 
 type errorResponse struct {
 	Error string `json:"error"`
@@ -105,9 +125,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 	reg, err := s.registry.Load()
 	if err != nil {
-		s.log.Warn("load registrations", "err", err)
+		s.log.Warn(registryLoadError)
 		w.WriteHeader(http.StatusInternalServerError)
-		_ = enc.Encode(errorResponse{Error: "cannot load registrations: " + err.Error()})
+		_ = enc.Encode(errorResponse{Error: registryLoadError})
 		return
 	}
 	resp := BuildProjectsResponse(reg.Views(), s.registry.Path(), time.Now())

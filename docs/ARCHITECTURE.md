@@ -75,12 +75,15 @@ prefix keeps every package private to this module.
   that decides what a checkout looks like to a user.
 - **Status is never invented.** Until collectors exist, every checkout's
   runtime status is `unknown` with an explicit "not collected" reason. The
-  only observed fact is whether the directory exists, stamped with the time
-  of the stat.
+  only observed fact is a directory stat, stamped with its check time.
+  Absence and a failed observation are distinct; neither removes a registration.
 - **Registry writes are serialised and atomic.** `registryfile.Store.Update`
   takes an advisory lock, loads, applies the change, validates, writes a temp
   file, and renames it over the original. A malformed file fails the
-  operation and is never rewritten.
+  operation and is never rewritten. The persistent sidecar lock survives
+  registry replacement and waits at most 10 seconds. Parent-directory aliases
+  are resolved; file symlinks and hard links are rejected. Writes are supported
+  only on Linux/WSL with local filesystem locking and rename semantics.
 - **Read-only HTTP.** The server exposes GET only. Registrations change
   through the CLI, which is also where the lock and validation live.
 
@@ -141,7 +144,8 @@ Unit tests cover argument errors, loopback enforcement, health output, the
 home page, occupied-port reporting, graceful shutdown with an in-flight
 request, checkout identity (symlinks, relative paths, worktrees), project
 name rules, safe removal, persistence across reloads, malformed-file
-handling, concurrent updates, HTML escaping of project names, and the
-read-only API. Later slices add tests for port-conflict logic, status and
+handling and recovery without exposing YAML values, concurrent updates from
+separate CLI processes, alias rejection, bounded lock waits, HTML escaping of
+project names, and the read-only API. Later slices add tests for port-conflict logic, status and
 staleness modelling, and secret exclusion, using controlled fixtures for Git
 and Docker, plus at least one flow verified against a real local project.

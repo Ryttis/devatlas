@@ -50,7 +50,7 @@
           <td>{{$p.Name}} <span class="muted">({{$p.ID}})</span></td>
           <td><code>{{.ID}}</code></td>
           <td><code>{{.Path}}</code></td>
-          <td>{{if .PathExists}}present{{else}}missing{{end}}</td>
+          <td>{{.PathStatus}}</td>
           <td>{{.Runtime.Status}}</td>
         </tr>
         {{end}}

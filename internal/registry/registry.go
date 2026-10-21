@@ -51,6 +51,7 @@ type Registry struct {
 // to exit codes or HTTP responses.
 var (
 	ErrDuplicatePath       = errors.New("directory is already registered")
+	ErrCheckoutIDCollision = errors.New("checkout ID collision between different paths")
 	ErrUnknownCheckout     = errors.New("unknown checkout ID")
 	ErrProjectNameMismatch = errors.New("project already exists with a different name")
 	ErrProjectNameRequired = errors.New("a project name is required for a new project")
@@ -174,6 +175,12 @@ func (r *Registry) Add(req AddRequest) (AddResult, error) {
 	if existing, ok := r.CheckoutByPath(canonical); ok {
 		return res, fmt.Errorf("%w: %s is checkout %s of project %s", ErrDuplicatePath, canonical, existing.ID, existing.ProjectID)
 	}
+	id := CheckoutID(canonical)
+	for _, c := range r.Checkouts {
+		if c.ID == id {
+			return res, fmt.Errorf("%w: %s identifies both %q and %q", ErrCheckoutIDCollision, id, c.Path, canonical)
+		}
+	}
 	now := req.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -195,7 +202,7 @@ func (r *Registry) Add(req AddRequest) (AddResult, error) {
 		return res, fmt.Errorf("%w: project %s is named %q, not %q", ErrProjectNameMismatch, req.ProjectID, r.Projects[idx].Name, req.Name)
 	}
 
-	ck := Checkout{ID: CheckoutID(canonical), ProjectID: req.ProjectID, Path: canonical, RegisteredAt: now}
+	ck := Checkout{ID: id, ProjectID: req.ProjectID, Path: canonical, RegisteredAt: now}
 	r.Checkouts = append(r.Checkouts, ck)
 	r.sort()
 	res.Project = r.Projects[r.projectIndex(req.ProjectID)]
@@ -288,6 +295,14 @@ func (r *Registry) Validate() error {
 		}
 		if c.Path == "" || !filepath.IsAbs(c.Path) {
 			return fmt.Errorf("%w: checkout %s has a non-absolute path %q", ErrInvalid, c.ID, c.Path)
+		}
+		if filepath.Clean(c.Path) != c.Path {
+			return fmt.Errorf("%w: checkout %s has an unclean path", ErrInvalid, c.ID)
+		}
+		// An unavailable directory remains registered. Resolve only when the
+		// filesystem permits it; observation errors belong in the read model.
+		if resolved, err := filepath.EvalSymlinks(c.Path); err == nil && resolved != c.Path {
+			return fmt.Errorf("%w: checkout %s has a non-canonical path", ErrInvalid, c.ID)
 		}
 		if paths[c.Path] {
 			return fmt.Errorf("%w: path %q appears more than once", ErrInvalid, c.Path)

@@ -143,11 +143,7 @@ func runList(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(tw, "PROJECT\tNAME\tCHECKOUT\tPATH\tDIRECTORY")
 	for _, p := range resp.Projects {
 		for _, c := range p.Checkouts {
-			dir := "present"
-			if !c.PathExists {
-				dir = "missing"
-			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, c.ID, c.Path, dir)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.ID, p.Name, c.ID, c.Path, c.PathStatus)
 		}
 	}
 	tw.Flush()

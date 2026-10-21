@@ -221,3 +221,49 @@ func TestValidateDetectsCorruption(t *testing.T) {
 		}
 	}
 }
+
+func TestAddCollisionLeavesModelUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	canonical, err := CanonicalDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force an occupied truncated ID without a probabilistic hash search.
+	r := Registry{Projects: []Project{{ID: "old", Name: "Old"}}, Checkouts: []Checkout{{ID: CheckoutID(canonical), ProjectID: "old", Path: "/different-path"}}}
+	_, err = r.Add(AddRequest{ProjectID: "new", Name: "New", Path: dir})
+	if !errors.Is(err, ErrCheckoutIDCollision) {
+		t.Fatalf("collision: %v", err)
+	}
+	if len(r.Projects) != 1 || len(r.Checkouts) != 1 || r.Checkouts[0].Path != "/different-path" {
+		t.Fatalf("mutated: %+v", r)
+	}
+}
+
+func TestValidateRejectsPathAliasesButPreservesUnavailablePaths(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "repo")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{dir + "/../repo", link} {
+		r := Registry{Projects: []Project{{ID: "p", Name: "P"}}, Checkouts: []Checkout{{ID: "1", ProjectID: "p", Path: dir}, {ID: "2", ProjectID: "p", Path: path}}}
+		if !errors.Is(r.Validate(), ErrInvalid) {
+			t.Fatalf("accepted alias %s", path)
+		}
+	}
+	r := Registry{}
+	mustAdd(t, &r, "p", "P", dir)
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Validate(); err != nil {
+		t.Fatalf("missing checkout invalidated: %v", err)
+	}
+	if len(r.Checkouts) != 1 {
+		t.Fatal("missing checkout removed")
+	}
+}

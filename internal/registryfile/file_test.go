@@ -101,7 +101,7 @@ func TestPersistsAcrossReload(t *testing.T) {
 	}
 }
 
-func TestDuplicateAcrossProcessesIsRejected(t *testing.T) {
+func TestDuplicateAcrossStoresIsRejected(t *testing.T) {
 	s, root := newTestStore(t)
 	d := filepath.Join(root, "one")
 	os.Mkdir(d, 0o755)
@@ -117,11 +117,16 @@ func TestDuplicateAcrossProcessesIsRejected(t *testing.T) {
 
 func TestMalformedFileIsReportedAndNeverRewritten(t *testing.T) {
 	cases := map[string]string{
-		"yaml syntax":    "schema_version: 1\nprojects: [\n",
-		"unknown field":  "schema_version: 1\nprojects: []\ncheckouts: []\nbogus: 1\n",
-		"orphan":         "schema_version: 1\nprojects: []\ncheckouts:\n  - id: abc\n    project_id: ghost\n    path: /x\n",
-		"bad project id": "schema_version: 1\nprojects:\n  - id: Bad Id\n    name: X\ncheckouts: []\n",
-		"wrong type":     "schema_version: one\n",
+		"extra document":       "schema_version: 1\nprojects: []\ncheckouts: []\n---\nsecret: hidden\n",
+		"empty extra document": "schema_version: 1\n---\n",
+		"duplicate project":    "schema_version: 1\nprojects: [{id: p, name: P}, {id: p, name: Q}]\n",
+		"duplicate checkout":   "schema_version: 1\nprojects: [{id: p, name: P}]\ncheckouts: [{id: abc, project_id: p, path: /a}, {id: abc, project_id: p, path: /b}]\n",
+		"duplicate path":       "schema_version: 1\nprojects: [{id: p, name: P}]\ncheckouts: [{id: abc, project_id: p, path: /a}, {id: def, project_id: p, path: /a}]\n",
+		"yaml syntax":          "schema_version: 1\nprojects: [\n",
+		"unknown field":        "schema_version: 1\nprojects: []\ncheckouts: []\nbogus: 1\n",
+		"orphan":               "schema_version: 1\nprojects: []\ncheckouts:\n  - id: abc\n    project_id: ghost\n    path: /x\n",
+		"bad project id":       "schema_version: 1\nprojects:\n  - id: Bad Id\n    name: X\ncheckouts: []\n",
+		"wrong type":           "schema_version: one\n",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

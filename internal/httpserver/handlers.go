@@ -114,14 +114,17 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		RegistryFile: s.registry.Path(),
 	}
 	if reg, err := s.registry.Load(); err != nil {
-		s.log.Warn("load registrations", "err", err)
-		data.RegistryError = err.Error()
+		s.log.Warn(registryLoadError)
+		data.RegistryError = registryLoadError
 	} else {
 		resp := BuildProjectsResponse(reg.Views(), s.registry.Path(), now)
 		data.Registrations = &resp
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	if data.RegistryError != "" {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 	if err := homeTemplate.Execute(w, data); err != nil {
 		s.log.Warn("render home page", "err", err)
 	}

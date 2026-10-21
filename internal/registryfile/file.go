@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -68,18 +69,71 @@ func ResolvePath(flagValue string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve registration file path %q: %w", p, err)
 	}
-	return abs, nil
+	return configPath(abs)
+}
+
+// Resolve directory aliases even before the configuration directory exists.
+// File aliases are rejected: rename would detach a symlink or hard link from
+// its target, splitting one apparent registry into independently locked files.
+func configPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	dir, err := resolveDir(filepath.Dir(abs))
+	if err != nil {
+		return "", fmt.Errorf("resolve configuration directory: %w", err)
+	}
+	path = filepath.Join(dir, filepath.Base(abs))
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return path, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := regularFile(info); err != nil {
+		return "", fmt.Errorf("registration file %s: %w", path, err)
+	}
+	return path, nil
+}
+
+func resolveDir(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	// Only recurse through absent components, never through a dangling link
+	// or an inaccessible component (which must remain an error).
+	if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+		return "", err
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return "", err
+	}
+	resolved, err = resolveDir(parent)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(resolved, filepath.Base(path)), nil
 }
 
 // Store reads and writes one registration file.
 type Store struct {
 	path string
+	err  error
 }
 
-// NewStore returns a store for the given file path. Nothing is read or
-// created until Load or Update is called.
+// NewStore resolves the configuration path and checks file metadata. No file
+// contents are read and nothing is created until Load or Update is called.
+// Resolution errors are returned by Load and Update.
 func NewStore(path string) *Store {
-	return &Store{path: path}
+	resolved, err := configPath(path)
+	if err != nil {
+		return &Store{path: path, err: err}
+	}
+	return &Store{path: resolved}
 }
 
 // Path returns the registration file path.
@@ -114,6 +168,16 @@ const fileHeader = `# DevAtlas registration file. Managed by "devatlas add" and 
 // cannot be parsed or fails validation yields an error wrapping ErrMalformed
 // and is never modified.
 func (s *Store) Load() (*registry.Registry, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	path, err := configPath(s.path)
+	if err != nil {
+		return nil, err
+	}
+	if path != s.path {
+		return nil, errors.New("configuration directory changed; reopen the store")
+	}
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return &registry.Registry{}, nil
@@ -129,7 +193,11 @@ func decode(path string, data []byte) (*registry.Registry, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&doc); err != nil {
-		return nil, fmt.Errorf("%w %s: %v", ErrMalformed, path, err)
+		return nil, fmt.Errorf("%w %s: invalid YAML or field type", ErrMalformed, path)
+	}
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err != io.EOF {
+		return nil, fmt.Errorf("%w %s: expected exactly one YAML document", ErrMalformed, path)
 	}
 	if doc.SchemaVersion != registry.SchemaVersion {
 		return nil, fmt.Errorf("%w: %s declares schema_version %d, this build supports %d", ErrUnsupportedSchema, path, doc.SchemaVersion, registry.SchemaVersion)
@@ -142,7 +210,7 @@ func decode(path string, data []byte) (*registry.Registry, error) {
 		reg.Checkouts = append(reg.Checkouts, registry.Checkout{ID: c.ID, ProjectID: c.ProjectID, Path: c.Path, RegisteredAt: c.RegisteredAt})
 	}
 	if err := reg.Validate(); err != nil {
-		return nil, fmt.Errorf("%w %s: %v", ErrMalformed, path, err)
+		return nil, fmt.Errorf("%w %s: inconsistent registration model", ErrMalformed, path)
 	}
 	return reg, nil
 }
@@ -173,6 +241,9 @@ func encode(reg *registry.Registry) ([]byte, error) {
 // The read-modify-write runs entirely inside the lock, so two concurrent
 // updates are applied one after the other instead of the last one winning.
 func (s *Store) Update(fn func(reg *registry.Registry) error) error {
+	if s.err != nil {
+		return s.err
+	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("create configuration directory: %w", err)
 	}
@@ -233,9 +304,14 @@ func writeAtomic(path string, data []byte) error {
 		cleanup()
 		return fmt.Errorf("replace registration file: %w", err)
 	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("registration replaced, but open directory for sync failed: %w", err)
+	}
+	syncErr := d.Sync()
+	closeErr := d.Close()
+	if err := errors.Join(syncErr, closeErr); err != nil {
+		return fmt.Errorf("registration replaced, but directory durability check failed: %w", err)
 	}
 	return nil
 }

@@ -20,12 +20,14 @@ reason "not collected". See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - Go 1.22 or newer, available inside WSL. 1.22 is the real minimum: the
   router relies on `net/http.ServeMux` method and `{$}` patterns, which are
   enabled by the `go 1.22` directive in `go.mod`. Use a currently supported
-  Go release in practice; this slice was verified with Go 1.27.3 and Go 1.22.
+  Go release in practice; the slice 02 follow-up was verified with Go 1.27.3.
   Install Go from <https://go.dev/dl/> (for example unpack the Linux tarball
   to `/usr/local/go` and add `/usr/local/go/bin` to `PATH`) or through your
   distribution. The only module dependency is the YAML library
   `go.yaml.in/yaml/v3` (see "Dependencies"); `go build` downloads it through
   the module proxy on first use.
+- Linux/WSL is the supported platform. Registration writes fail explicitly
+  on other operating systems; there is no unverified fallback lock.
 - Git, to clone the repository and so that `devatlas version` and
   `/health` can report the commit. Builds from a working tree with
   uncommitted or untracked files are flagged as `dirty` / `"modified": true`.
@@ -84,18 +86,33 @@ Every command that reads or writes registrations accepts `-config PATH`.
 ### Registering projects
 
 ```sh
-# Register a directory as a checkout of project "carrier-self-service".
+# Use a fresh demonstration registry, so this also works when CSS is already
+# registered in your usual registry. Keep this variable in the server shell too.
+export DEVATLAS_CONFIG="$(mktemp -d)/registrations.yaml"
+
+# Register the existing CSS directory (adjust the path to your checkout).
 # The first registration of a project ID needs -name.
 bin/devatlas add -project carrier-self-service -name "Carrier Self-Service" ~/code/carrier-self-service
 
-# A Git worktree of the same project is a second checkout; -name may be omitted.
+# Optional: run this only if this separate worktree directory already exists.
+# It is a second checkout of the same project; -name may be omitted.
 bin/devatlas add -project carrier-self-service ~/code/carrier-self-service-hotfix
 
 bin/devatlas list          # table
 bin/devatlas list -json    # same document as GET /api/projects
 
-bin/devatlas remove 3f1c9a2b7e4d   # by checkout ID, as shown by list
+# To remove a registration, copy its actual checkout ID from list:
+# bin/devatlas remove CHECKOUT_ID
+
+# To view the demo, run bin/devatlas serve in this shell; stop with Ctrl+C.
+# When finished with this demonstration, return to your registry:
+unset DEVATLAS_CONFIG
 ```
+
+For your usual registry, run `bin/devatlas list` first. If CSS is already
+listed, skip its first `add`; use its existing project ID for another checkout.
+A duplicate `add` deliberately fails. The demonstration file remains in the
+temporary directory until you delete it.
 
 Rules, all enforced by tests:
 
@@ -105,12 +122,14 @@ Rules, all enforced by tests:
 - **Checkout identity is the directory.** The path is resolved to a canonical
   absolute directory with symlinks evaluated, and the checkout ID is the first
   12 hex characters of the SHA-256 of that path. The same directory therefore
-  always gets the same ID, and the directory must exist.
+  always gets the same ID, and the directory must exist at registration time.
+  A truncated-ID collision with a different path is rejected before mutation.
 - **Duplicates are rejected.** Registering a directory that is already
   registered, under any project and by any spelling (relative path, symlink,
   trailing slash), fails with exit code 1 and names the existing checkout.
   Distinct directories, such as two Git worktrees of one repository, are
-  distinct checkouts.
+  distinct checkouts. Missing or inaccessible registered directories stay
+  registered until explicitly removed.
 - **Names are stable.** `-name` is required when the project ID is new. For an
   existing project it may be omitted; a different name is an error, not a
   rename.
@@ -149,16 +168,25 @@ checkouts:
     registered_at: 2026-10-21T12:00:00Z
 ```
 
-- The file and its directory are created on the first `add` with mode 0600
-  and 0700. `list` and `serve` treat a missing file as an empty registry.
+- The file and newly created configuration directories use mode 0600
+  and 0700 respectively (existing directory permissions are preserved).
+  `list` and `serve` treat a missing file as an empty registry.
 - Writes go to a temporary file in the same directory followed by an atomic
   rename, so a crash cannot leave a half-written file.
 - Concurrent `add`/`remove` processes are serialised with an advisory lock on
   `registrations.yaml.lock` (flock, released automatically on exit). The whole
-  read-modify-write happens inside the lock, so no update is lost.
+  read-modify-write happens inside the lock, so no update is lost. Acquisition
+  waits at most 10 seconds. The sidecar stays in place across registry renames;
+  do not delete or replace it while any process may be using it.
+- Parent-directory symlink aliases resolve to the same configuration and lock
+  paths. Configuration-file symlinks, hard links, and special files are rejected;
+  pass the original regular file path instead. Keep the directory topology stable
+  while commands run. These guarantees apply to a local Linux filesystem with
+  working `flock` and atomic rename; network filesystems and Windows mounts have
+  not been verified.
 - A file that fails to parse, has unknown fields, declares another
-  `schema_version`, or is internally inconsistent (duplicate IDs, a checkout
-  whose project does not exist) makes every command fail with exit code 1 and
+  `schema_version`, contains extra YAML documents, or is internally inconsistent
+  (duplicate IDs, duplicate canonical paths, a checkout whose project does not exist) makes every command fail with exit code 1 and
   a message naming the file. The file is never rewritten in that state; fix it
   by hand or delete it.
 - The server reads the file on every request, so `add`/`remove` from another
@@ -247,11 +275,16 @@ Other paths return 404; other methods return 405. There are no mutation
 endpoints: registration changes go through the CLI only.
 
 `GET /api/projects` reports two facts per checkout and labels them honestly:
-`path_exists` is a stat of the directory at `checked_at`; `runtime` is always
+`path_exists` is a stat of the directory at `checked_at`: true for a directory,
+false for an absent path or a non-directory, and null when the observation fails.
+`path_status` distinguishes `present`, `missing`, `not a directory`, and `error`;
+the same status appears in the CLI table and HTML. `runtime` is always
 `{"status": "unknown", "reason": "not collected: ..."}` because no Git,
 Docker, port, or HTTP collection exists in this build. If the registration
-file is malformed the endpoint returns 500 with an `error` field and the home
-page shows the error instead of a table.
+file becomes malformed or unreadable, both registry endpoints return 500; the
+home page shows an error instead of a table. Responses and server logs omit YAML
+values and parser excerpts. Fixing the file restores responses without a restart.
+`/health` reports process health and does not validate registrations.
 
 ## Dependencies
 
