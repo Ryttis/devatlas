@@ -57,7 +57,8 @@ func (s *Server) Listen() (net.Listener, error) {
 		if errors.Is(err, syscall.EADDRINUSE) {
 			return nil, &AddrInUseError{Addr: addr, Err: err}
 		}
-		return nil, fmt.Errorf("listen on %s: %w", addr, err)
+		// err is a *net.OpError whose text already names the address.
+		return nil, fmt.Errorf("cannot start listener: %w", err)
 	}
 	return ln, nil
 }

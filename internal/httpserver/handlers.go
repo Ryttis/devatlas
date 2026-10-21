@@ -17,10 +17,13 @@ var homeTemplate = template.Must(template.ParseFS(templateFS, "templates/home.ht
 
 // Health is the JSON body of GET /health.
 type Health struct {
-	Status    string    `json:"status"`
-	Service   string    `json:"service"`
-	Version   string    `json:"version"`
-	Commit    string    `json:"commit"`
+	Status  string `json:"status"`
+	Service string `json:"service"`
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	// Modified is true when the binary was built from a working tree with
+	// uncommitted changes, so Commit does not fully describe the code.
+	Modified  bool      `json:"modified"`
 	CheckedAt time.Time `json:"checked_at"`
 	// UptimeSeconds is measured since the listener started serving.
 	UptimeSeconds int64 `json:"uptime_seconds"`
@@ -75,6 +78,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Service:       "devatlas",
 		Version:       info.Version,
 		Commit:        info.Commit,
+		Modified:      info.Modified,
 		CheckedAt:     now.UTC(),
 		UptimeSeconds: uptime,
 	}

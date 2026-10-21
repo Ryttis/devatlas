@@ -109,8 +109,21 @@ func TestHealthEndpoint(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, key := range []string{"status", "service", "version", "commit", "modified", "checked_at", "uptime_seconds"} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("health JSON is missing field %q: %s", key, raw)
+		}
+	}
 	var h Health
-	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
+	if err := json.Unmarshal(raw, &h); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if h.Status != "ok" || h.Service != "devatlas" {
@@ -214,8 +227,10 @@ func TestGracefulShutdownWaitsForInFlightRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Swap in a slow handler to observe that Shutdown waits for it.
+	entered := make(chan struct{})
 	release := make(chan struct{})
 	srv.http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
 		<-release
 		w.WriteHeader(http.StatusOK)
 	})
@@ -237,8 +252,12 @@ func TestGracefulShutdownWaitsForInFlightRequest(t *testing.T) {
 		resp.Body.Close()
 		result <- resp.StatusCode
 	}()
-	time.Sleep(100 * time.Millisecond) // let the request reach the handler
-	cancel()                           // begin graceful shutdown
+	select {
+	case <-entered: // the request is now in flight
+	case <-time.After(5 * time.Second):
+		t.Fatal("request never reached the handler")
+	}
+	cancel() // begin graceful shutdown
 
 	select {
 	case <-done:

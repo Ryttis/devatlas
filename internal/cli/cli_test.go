@@ -2,8 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"net"
+	"net/http"
+	"os"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRunArgumentErrors(t *testing.T) {
@@ -69,5 +78,97 @@ func TestRunVersion(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("expected empty stderr, got: %s", stderr.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for concurrent writes and reads, so a
+// test can watch the server log while serve runs in another goroutine.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func waitForLog(t *testing.T, buf *syncBuffer, substr string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), substr) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("log never contained %q:\n%s", substr, buf.String())
+}
+
+func TestServeOccupiedPortExitsWithFailure(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	port := occupied.Addr().(*net.TCPAddr).Port
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"serve", "-port", strconv.Itoa(port)}, &stdout, &stderr)
+	if code != ExitFailure {
+		t.Fatalf("exit code = %d, want %d; stderr:\n%s", code, ExitFailure, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "already in use") {
+		t.Fatalf("stderr does not explain the port conflict:\n%s", stderr.String())
+	}
+}
+
+// TestServeStopsOnInterrupt runs the real serve command and delivers SIGINT
+// to the test process, exercising the signal-to-graceful-shutdown path.
+func TestServeStopsOnInterrupt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("sending SIGINT to self is not supported on Windows")
+	}
+	var stdout bytes.Buffer
+	stderr := &syncBuffer{}
+	done := make(chan int, 1)
+	go func() { done <- Run([]string{"serve", "-port", "0", "-shutdown-timeout", "2s"}, &stdout, stderr) }()
+
+	// The listening line is logged after the signal handler is installed,
+	// so SIGINT sent after it is guaranteed to be caught and not kill us.
+	waitForLog(t, stderr, "devatlas listening")
+	url := regexp.MustCompile(`url=(http://\S+)`).FindStringSubmatch(stderr.String())
+	if url == nil {
+		t.Fatalf("no url in log:\n%s", stderr.String())
+	}
+	resp, err := http.Get(url[1] + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d", resp.StatusCode)
+	}
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != ExitOK {
+			t.Fatalf("exit code after SIGINT = %d, want 0; stderr:\n%s", code, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("serve did not stop after SIGINT; stderr:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "shutdown complete") {
+		t.Errorf("expected 'shutdown complete' in log:\n%s", stderr.String())
 	}
 }

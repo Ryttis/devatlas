@@ -13,13 +13,17 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the planned structure.
 
 ## Prerequisites
 
-- Go 1.27 or newer, available inside WSL. DevAtlas uses only the Go standard
-  library; there are no module dependencies. Install Go from
-  <https://go.dev/dl/> (for example unpack the Linux tarball to
-  `/usr/local/go` and add `/usr/local/go/bin` to `PATH`) or through your
-  distribution.
-- Git, to clone the repository and so that `devatlas version` can report
-  the commit.
+- Go 1.22 or newer, available inside WSL. 1.22 is the real minimum: the
+  router relies on `net/http.ServeMux` method and `{$}` patterns, which are
+  enabled by the `go 1.22` directive in `go.mod`. Use a currently supported
+  Go release in practice; this slice was verified with Go 1.27.3 and Go 1.22.
+  DevAtlas uses only the Go standard library; there are no module
+  dependencies. Install Go from <https://go.dev/dl/> (for example unpack the
+  Linux tarball to `/usr/local/go` and add `/usr/local/go/bin` to `PATH`) or
+  through your distribution.
+- Git, to clone the repository and so that `devatlas version` and
+  `/health` can report the commit. Builds from a working tree with
+  uncommitted or untracked files are flagged as `dirty` / `"modified": true`.
 - Docker Desktop with the WSL2 backend is a prerequisite for later slices
   (container inventory), not for this one.
 - `gcc` is only needed if you want to run the tests with `-race`.
@@ -115,14 +119,16 @@ bin/devatlas serve -host ::1 -port 0
      "status": "ok",
      "service": "devatlas",
      "version": "dev",
-     "commit": "9a6681734050",
+     "commit": "7ad7c318023d",
+     "modified": false,
      "checked_at": "2026-10-21T08:21:14Z",
      "uptime_seconds": 0
    }
    ```
 
 5. Stop with `Ctrl+C` (SIGINT) or `kill <pid>` (SIGTERM). The server finishes
-   in-flight requests, up to `-shutdown-timeout`, and exits with code 0.
+   in-flight requests, up to `-shutdown-timeout`, and exits with code 0. A
+   second signal during shutdown terminates the process immediately.
 
 If the port is occupied the server refuses to start and tells you so:
 
@@ -139,7 +145,7 @@ conflicts on your machine.
 | Method and path | Response                                                  |
 | --------------- | --------------------------------------------------------- |
 | `GET /`         | HTML home page with build info and implementation scope   |
-| `GET /health`   | JSON: `status`, `service`, `version`, `commit`, `checked_at`, `uptime_seconds` |
+| `GET /health`   | JSON: `status`, `service`, `version`, `commit`, `modified`, `checked_at`, `uptime_seconds` |
 
 Other paths return 404; other methods return 405.
 
@@ -153,7 +159,7 @@ internal/version/        build identification
 docs/ARCHITECTURE.md     current structure and intended adapter boundaries
 examples/project-registry.yaml
                          example project manifest (not yet read by the tool)
-implementation_brief.md  product specification this work follows (untracked)
+implementation_brief.md  approved scope document this work follows
 ```
 
 ## Local configuration

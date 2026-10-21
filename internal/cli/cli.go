@@ -136,10 +136,12 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		return ExitFailure
 	}
 
-	// Stop on SIGINT (Ctrl+C) or SIGTERM. A second signal while shutting
-	// down falls through to the default handler and kills the process.
+	// Stop on SIGINT (Ctrl+C) or SIGTERM. The signal handler is unregistered
+	// as soon as the first signal arrives, so a second signal during a slow
+	// graceful shutdown reaches the default handler and kills the process.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	context.AfterFunc(ctx, stop)
 
 	if err := srv.Serve(ctx, ln); err != nil {
 		logger.Error("server stopped with error", "err", err)
