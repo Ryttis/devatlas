@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevAtlas</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }
+    body { max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0; }
+    .muted { opacity: 0.7; }
+    code { font-family: ui-monospace, monospace; }
+    section { margin-top: 1.5rem; }
+    ul { padding-left: 1.25rem; }
+  </style>
+</head>
+<body>
+  <h1>DevAtlas</h1>
+  <p class="muted">Local project registry for a developer workstation.</p>
+
+  <section>
+    <h2>This instance</h2>
+    <ul>
+      <li>Version: <code>{{.Version.Version}}</code> (commit <code>{{.Version.Commit}}</code>{{if .Version.Modified}}, dirty{{end}})</li>
+      <li>Runtime: <code>{{.Version.GoVersion}}</code> on <code>{{.Version.OS}}/{{.Version.Arch}}</code></li>
+      <li>Bound to loopback address <code>{{.BindAddr}}</code></li>
+      <li>Health endpoint: <a href="/health"><code>GET /health</code></a></li>
+      <li>Page rendered at <code>{{.Now.Format "2006-01-02T15:04:05Z07:00"}}</code></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Implementation scope: slice {{.Scope.Slice}}</h2>
+    <h3>Implemented</h3>
+    <ul>
+      {{range .Scope.Implemented}}<li>{{.}}</li>
+      {{end}}
+    </ul>
+    <h3>Not yet implemented</h3>
+    <p class="muted">Nothing below is available in this build. No project data is collected or stored.</p>
+    <ul>
+      {{range .Scope.Deferred}}<li>{{.}}</li>
+      {{end}}
+    </ul>
+  </section>
+</body>
+</html>

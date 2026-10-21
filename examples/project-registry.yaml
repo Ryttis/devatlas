@@ -1,0 +1,47 @@
+# EXAMPLE ONLY — this file is documentation, not configuration.
+#
+# It illustrates the project-registry.yaml manifest proposed in the DevAtlas
+# implementation brief (section 6). The file would live in the root of a
+# *registered* project's repository, not in DevAtlas itself.
+#
+# DevAtlas slice 01 does not read this file. The schema below is a proposal and
+# may change when manifest loading is implemented. Document paths are
+# illustrative; nothing here asserts that those files exist.
+#
+# Keep machine-specific paths, overrides, and private addresses out of this
+# file: they belong in local registry configuration that is excluded from Git.
+
+schema_version: 1
+
+project:
+  id: carrier-self-service            # stable identifier, not the directory name
+  name: Carrier Self-Service
+  description: Carrier self-service portal
+  stack: [php, symfony, docker-compose]
+
+runtime:
+  compose_files: [compose.yaml]
+  # If the Compose project name is dynamic, set it in local configuration.
+  profiles: []
+
+links:
+  # Populate addresses from the actual environment (local configuration).
+  application: null
+  api_docs: null
+  jira: null
+
+documents:
+  # Relative to the repository root. Missing files are reported as "not found".
+  architecture: docs/ARCHITECTURE.md
+  current_state: docs/CURRENT_STATE.md
+  decisions: docs/DECISIONS.md
+
+ai:
+  development:
+    instruction_files: [AGENTS.md, CLAUDE.md]
+  product:
+    enabled: false
+
+# Explicitly configured HTTP GET checks only (none in this example).
+# Each later entry will need a URL, a timeout, and accepted status codes.
+checks: []
