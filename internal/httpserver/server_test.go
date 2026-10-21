@@ -8,13 +8,22 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Ryttis/devatlas/internal/registryfile"
 )
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// testStore returns a registry store backed by a fresh temporary file.
+func testStore(t *testing.T) *registryfile.Store {
+	t.Helper()
+	return registryfile.NewStore(filepath.Join(t.TempDir(), "registrations.yaml"))
 }
 
 func TestConfigRejectsNonLoopbackHosts(t *testing.T) {
@@ -25,7 +34,7 @@ func TestConfigRejectsNonLoopbackHosts(t *testing.T) {
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("host %q: expected validation error, got nil", host)
 		}
-		if _, err := New(cfg, testLogger()); err == nil {
+		if _, err := New(cfg, testStore(t), testLogger()); err == nil {
 			t.Errorf("host %q: New should fail for a non-loopback host", host)
 		}
 	}
@@ -63,10 +72,15 @@ func TestConfigRejectsBadPortAndTimeout(t *testing.T) {
 // returned stop function is called. stop returns the Serve error.
 func startTestServer(t *testing.T) (base string, stop func() error) {
 	t.Helper()
+	return startTestServerWith(t, testStore(t))
+}
+
+func startTestServerWith(t *testing.T, store *registryfile.Store) (base string, stop func() error) {
+	t.Helper()
 	cfg := DefaultConfig()
 	cfg.Port = 0
 	cfg.ShutdownTimeout = 2 * time.Second
-	srv, err := New(cfg, testLogger())
+	srv, err := New(cfg, store, testLogger())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -200,7 +214,7 @@ func TestListenReportsOccupiedPort(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Port = port
-	srv, err := New(cfg, testLogger())
+	srv, err := New(cfg, testStore(t), testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +236,7 @@ func TestGracefulShutdownWaitsForInFlightRequest(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Port = 0
 	cfg.ShutdownTimeout = 3 * time.Second
-	srv, err := New(cfg, testLogger())
+	srv, err := New(cfg, testStore(t), testLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

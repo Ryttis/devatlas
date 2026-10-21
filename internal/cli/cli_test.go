@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -13,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Ryttis/devatlas/internal/registry"
 )
 
 func TestRunArgumentErrors(t *testing.T) {
@@ -171,4 +174,125 @@ func TestServeStopsOnInterrupt(t *testing.T) {
 	if !strings.Contains(stderr.String(), "shutdown complete") {
 		t.Errorf("expected 'shutdown complete' in log:\n%s", stderr.String())
 	}
+}
+
+func runCLI(t *testing.T, args ...string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := Run(args, &stdout, &stderr)
+	return code, stdout.String(), stderr.String()
+}
+
+func TestRegistrationCommandsEndToEnd(t *testing.T) {
+	root := t.TempDir()
+	cfg := filepath.Join(root, "conf", "registrations.yaml")
+	t.Setenv("DEVATLAS_CONFIG", cfg) // used by commands that do not pass -config
+	repo := filepath.Join(root, "repo")
+	wt := filepath.Join(root, "repo-wt")
+	os.Mkdir(repo, 0o755)
+	os.Mkdir(wt, 0o755)
+
+	// Usage errors.
+	for _, args := range [][]string{
+		{"add"},       // no directory
+		{"add", repo}, // no -project
+		{"add", "-project", "Bad", "-name", "x", repo}, // bad id
+		{"add", "-project", "p", "-name", "x", repo, "extra"},
+		{"remove"},
+		{"list", "extra"},
+	} {
+		if code, _, _ := runCLI(t, args...); code != ExitUsage {
+			t.Errorf("%v: exit %d, want %d", args, code, ExitUsage)
+		}
+	}
+	// Missing directory and missing name are usage errors too.
+	if code, _, errOut := runCLI(t, "add", "-project", "p", "-name", "x", filepath.Join(root, "nope")); code != ExitUsage || !strings.Contains(errOut, "does not exist") {
+		t.Errorf("missing dir: %d %s", code, errOut)
+	}
+	if code, _, errOut := runCLI(t, "add", "-project", "p", repo); code != ExitUsage || !strings.Contains(errOut, "project name is required") {
+		t.Errorf("missing name: %d %s", code, errOut)
+	}
+
+	// Empty list.
+	code, out, _ := runCLI(t, "list")
+	if code != ExitOK || !strings.Contains(out, "no projects registered") || !strings.Contains(out, cfg) {
+		t.Fatalf("empty list: %d %s", code, out)
+	}
+
+	// Add, with -config flag overriding the environment.
+	code, out, errOut := runCLI(t, "add", "-config", cfg, "-project", "demo", "-name", "Demo Project", repo)
+	if code != ExitOK || !strings.Contains(out, "created project demo") || !strings.Contains(out, "registered checkout ") {
+		t.Fatalf("add: %d\n%s\n%s", code, out, errOut)
+	}
+	id := regexp.MustCompile(`registered checkout ([0-9a-f]{12})`).FindStringSubmatch(out)[1]
+
+	// Duplicate (through a symlink) fails with exit 1 and names the checkout.
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(repo, link); err == nil {
+		code, _, errOut = runCLI(t, "add", "-project", "demo", link)
+		if code != ExitFailure || !strings.Contains(errOut, "already registered") || !strings.Contains(errOut, id) {
+			t.Errorf("duplicate via symlink: %d %s", code, errOut)
+		}
+	}
+	// Name mismatch fails.
+	if code, _, errOut = runCLI(t, "add", "-project", "demo", "-name", "Other", wt); code != ExitFailure || !strings.Contains(errOut, "different name") {
+		t.Errorf("name mismatch: %d %s", code, errOut)
+	}
+	// Worktree as second checkout.
+	if code, out, errOut = runCLI(t, "add", "-project", "demo", wt); code != ExitOK || strings.Contains(out, "created project") {
+		t.Fatalf("add worktree: %d %s %s", code, out, errOut)
+	}
+
+	// List shows both; JSON matches the API shape.
+	code, out, _ = runCLI(t, "list")
+	if code != ExitOK || strings.Count(out, "demo") < 2 || !strings.Contains(out, "present") || !strings.Contains(out, "not collected") {
+		t.Fatalf("list: %d\n%s", code, out)
+	}
+	code, out, _ = runCLI(t, "list", "-json")
+	if code != ExitOK || !strings.Contains(out, `"schema_version": 1`) || strings.Count(out, `"runtime"`) != 2 {
+		t.Fatalf("list -json: %d\n%s", code, out)
+	}
+
+	// Remove unknown, then remove both; the project goes with the last one.
+	if code, _, errOut = runCLI(t, "remove", "zzz"); code != ExitFailure || !strings.Contains(errOut, "unknown checkout ID") {
+		t.Errorf("remove unknown: %d %s", code, errOut)
+	}
+	marker := filepath.Join(repo, "keep.txt")
+	os.WriteFile(marker, []byte("x"), 0o600)
+	if code, out, _ = runCLI(t, "remove", id); code != ExitOK || strings.Contains(out, "removed project") {
+		t.Fatalf("remove first: %d %s", code, out)
+	}
+	wtID := registry.CheckoutID(mustCanonical(t, wt))
+	if code, out, _ = runCLI(t, "remove", wtID); code != ExitOK || !strings.Contains(out, "removed project demo") {
+		t.Fatalf("remove last: %d %s", code, out)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("remove touched project files")
+	}
+	code, out, _ = runCLI(t, "list")
+	if code != ExitOK || !strings.Contains(out, "no projects registered") {
+		t.Fatalf("list after removal: %s", out)
+	}
+
+	// Malformed file: every command reports it and leaves it alone.
+	bad := "schema_version: 1\nprojects: [\n"
+	os.WriteFile(cfg, []byte(bad), 0o600)
+	for _, args := range [][]string{{"list"}, {"add", "-project", "x", "-name", "X", repo}, {"remove", id}, {"serve", "-port", "0"}} {
+		code, _, errOut := runCLI(t, args...)
+		if code != ExitFailure || !strings.Contains(errOut, "malformed registration file") {
+			t.Errorf("%v on malformed file: exit %d, stderr %s", args, code, errOut)
+		}
+	}
+	if after, _ := os.ReadFile(cfg); string(after) != bad {
+		t.Fatal("malformed file was rewritten")
+	}
+}
+
+func mustCanonical(t *testing.T, p string) string {
+	t.Helper()
+	c, err := registry.CanonicalDir(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

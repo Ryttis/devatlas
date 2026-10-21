@@ -5,11 +5,15 @@ locally developed projects, their actual runtime status, and project context
 for the developer and AI coding agents. It targets Windows 11 + WSL2 and runs
 as one Go process inside WSL.
 
-**Current state: slice 01, application bootstrap.** This build provides the
-`devatlas` CLI, a loopback-only HTTP server, a JSON health endpoint, and a
-home page. It does not yet register projects, read `project-registry.yaml`,
-talk to Git or Docker, analyse ports, run HTTP checks, or export context.
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the planned structure.
+**Current state: slice 02, project and checkout registration.** This build
+provides the `devatlas` CLI, a loopback-only HTTP server with a JSON health
+endpoint, and persistent registration of existing project directories as
+checkouts of explicitly named projects. Registrations are shown by
+`devatlas list`, by the read-only `GET /api/projects` endpoint, and on the
+HTML home page. It does not yet read `project-registry.yaml`, scan
+directories, talk to Git or Docker, analyse ports, run HTTP checks, or export
+context; every checkout's runtime status is reported as `unknown` with the
+reason "not collected". See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Prerequisites
 
@@ -17,10 +21,11 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the planned structure.
   router relies on `net/http.ServeMux` method and `{$}` patterns, which are
   enabled by the `go 1.22` directive in `go.mod`. Use a currently supported
   Go release in practice; this slice was verified with Go 1.27.3 and Go 1.22.
-  DevAtlas uses only the Go standard library; there are no module
-  dependencies. Install Go from <https://go.dev/dl/> (for example unpack the
-  Linux tarball to `/usr/local/go` and add `/usr/local/go/bin` to `PATH`) or
-  through your distribution.
+  Install Go from <https://go.dev/dl/> (for example unpack the Linux tarball
+  to `/usr/local/go` and add `/usr/local/go/bin` to `PATH`) or through your
+  distribution. The only module dependency is the YAML library
+  `go.yaml.in/yaml/v3` (see "Dependencies"); `go build` downloads it through
+  the module proxy on first use.
 - Git, to clone the repository and so that `devatlas version` and
   `/health` can report the commit. Builds from a working tree with
   uncommitted or untracked files are flagged as `dirty` / `"modified": true`.
@@ -63,13 +68,101 @@ go test -race ./... # requires cgo and a C compiler
 ## CLI usage
 
 ```text
-devatlas <command> [flags]
+devatlas <command> [flags] [arguments]
 
 Commands:
+  add       Register a directory as a checkout of a project.
+  list      List registered projects and their checkouts.
+  remove    Remove a checkout registration by ID (never touches files).
   serve     Start the local HTTP server (loopback only).
   version   Print build information.
   help      Show this help.
 ```
+
+Every command that reads or writes registrations accepts `-config PATH`.
+
+### Registering projects
+
+```sh
+# Register a directory as a checkout of project "carrier-self-service".
+# The first registration of a project ID needs -name.
+bin/devatlas add -project carrier-self-service -name "Carrier Self-Service" ~/code/carrier-self-service
+
+# A Git worktree of the same project is a second checkout; -name may be omitted.
+bin/devatlas add -project carrier-self-service ~/code/carrier-self-service-hotfix
+
+bin/devatlas list          # table
+bin/devatlas list -json    # same document as GET /api/projects
+
+bin/devatlas remove 3f1c9a2b7e4d   # by checkout ID, as shown by list
+```
+
+Rules, all enforced by tests:
+
+- **Project identity is explicit.** A project is whatever ID you choose
+  (1-64 lowercase letters, digits, hyphens). It is never derived from a
+  directory name or Git remote. Several checkouts can share one project ID.
+- **Checkout identity is the directory.** The path is resolved to a canonical
+  absolute directory with symlinks evaluated, and the checkout ID is the first
+  12 hex characters of the SHA-256 of that path. The same directory therefore
+  always gets the same ID, and the directory must exist.
+- **Duplicates are rejected.** Registering a directory that is already
+  registered, under any project and by any spelling (relative path, symlink,
+  trailing slash), fails with exit code 1 and names the existing checkout.
+  Distinct directories, such as two Git worktrees of one repository, are
+  distinct checkouts.
+- **Names are stable.** `-name` is required when the project ID is new. For an
+  existing project it may be omitted; a different name is an error, not a
+  rename.
+- **Unknown IDs fail.** `remove` with an ID that is not registered exits with
+  code 1 and changes nothing.
+- **Removing the last checkout removes the project record.** A project holds
+  only its ID and name in this version, both of which are supplied again on
+  the next `add`, so an empty project record would only be clutter. The
+  command says so when it happens.
+- **Removal never touches files.** Only the registration file changes. The
+  directory, its contents, worktrees, and containers are left alone.
+- **No Git, Docker, or manifest is needed** to register a directory.
+
+### Registration file
+
+Registrations live in one YAML file outside every inventoried repository:
+
+| Precedence | Location |
+| --- | --- |
+| 1 | `-config PATH` flag |
+| 2 | `DEVATLAS_CONFIG` environment variable |
+| 3 | `$XDG_CONFIG_HOME/devatlas/registrations.yaml`, i.e. `~/.config/devatlas/registrations.yaml` on WSL |
+
+```yaml
+# DevAtlas registration file. Managed by "devatlas add" and "devatlas remove".
+# Paths are machine-specific; keep this file out of version control.
+schema_version: 1
+projects:
+  - id: carrier-self-service
+    name: Carrier Self-Service
+    registered_at: 2026-10-21T12:00:00Z
+checkouts:
+  - id: 3f1c9a2b7e4d
+    project_id: carrier-self-service
+    path: /home/rytis/code/carrier-self-service
+    registered_at: 2026-10-21T12:00:00Z
+```
+
+- The file and its directory are created on the first `add` with mode 0600
+  and 0700. `list` and `serve` treat a missing file as an empty registry.
+- Writes go to a temporary file in the same directory followed by an atomic
+  rename, so a crash cannot leave a half-written file.
+- Concurrent `add`/`remove` processes are serialised with an advisory lock on
+  `registrations.yaml.lock` (flock, released automatically on exit). The whole
+  read-modify-write happens inside the lock, so no update is lost.
+- A file that fails to parse, has unknown fields, declares another
+  `schema_version`, or is internally inconsistent (duplicate IDs, a checkout
+  whose project does not exist) makes every command fail with exit code 1 and
+  a message naming the file. The file is never rewritten in that state; fix it
+  by hand or delete it.
+- The server reads the file on every request, so `add`/`remove` from another
+  terminal shows up in the API and on the page without restarting `serve`.
 
 `devatlas serve` flags:
 
@@ -79,10 +172,12 @@ Commands:
 | `-port`             | `8642`      | TCP port. `0` picks a free port; the chosen URL is logged. |
 | `-shutdown-timeout` | `10s`       | Time allowed for in-flight requests after SIGINT/SIGTERM. |
 | `-log-level`        | `info`      | `debug`, `info`, `warn`, or `error`.                      |
+| `-config`           | see above   | Registration file to serve.                               |
 
-Exit codes: `0` success, `1` runtime failure (for example the port is already
-in use), `2` invalid command line (unknown command or flag, non-loopback host,
-port out of range).
+Exit codes: `0` success, `1` runtime failure (port already in use, duplicate
+directory, unknown checkout ID, malformed registration file), `2` invalid
+command line (unknown command or flag, non-loopback host, port out of range,
+missing or nonexistent directory, missing project name).
 
 Examples:
 
@@ -144,17 +239,36 @@ conflicts on your machine.
 
 | Method and path | Response                                                  |
 | --------------- | --------------------------------------------------------- |
-| `GET /`         | HTML home page with build info and implementation scope   |
+| `GET /`         | HTML home page: registered projects and checkouts, build info, implementation scope |
 | `GET /health`   | JSON: `status`, `service`, `version`, `commit`, `modified`, `checked_at`, `uptime_seconds` |
+| `GET /api/projects` | JSON: `schema_version`, `generated_at`, `registry_file`, `runtime_status`, and `projects[]` with `checkouts[]` |
 
-Other paths return 404; other methods return 405.
+Other paths return 404; other methods return 405. There are no mutation
+endpoints: registration changes go through the CLI only.
+
+`GET /api/projects` reports two facts per checkout and labels them honestly:
+`path_exists` is a stat of the directory at `checked_at`; `runtime` is always
+`{"status": "unknown", "reason": "not collected: ..."}` because no Git,
+Docker, port, or HTTP collection exists in this build. If the registration
+file is malformed the endpoint returns 500 with an `error` field and the home
+page shows the error instead of a table.
+
+## Dependencies
+
+| Module | Version | Why |
+| --- | --- | --- |
+| `go.yaml.in/yaml/v3` | v3.0.5 | YAML for the registration file. This is the YAML organisation's maintained continuation of `gopkg.in/yaml.v3` (same API; the original repository was archived in 2025 with v3.0.1 as its last release). v4 was still a release candidate when chosen. Pinned in `go.mod` and `go.sum`. |
+
+Everything else is the Go standard library.
 
 ## Repository layout
 
 ```text
 cmd/devatlas/            CLI entry point
 internal/cli/            command dispatch, flags, signal handling
-internal/httpserver/     loopback HTTP server, handlers, templates
+internal/httpserver/     loopback HTTP server, handlers, templates, /api/projects
+internal/registry/       registration model: projects, checkouts, identity rules
+internal/registryfile/   YAML persistence, atomic writes, locking, config path
 internal/version/        build identification
 docs/ARCHITECTURE.md     current structure and intended adapter boundaries
 examples/project-registry.yaml
@@ -164,6 +278,7 @@ implementation_brief.md  approved scope document this work follows
 
 ## Local configuration
 
-Machine-specific settings (absolute paths, private addresses, port overrides)
-are intended to live in local files that are ignored by Git, such as
-`devatlas.local.yaml` or `*.local.yaml`. No such file is read yet.
+The registration file described above holds machine-specific absolute paths
+and lives under the user configuration directory, never inside a project
+repository. Other local settings (`devatlas.local.yaml`, `*.local.yaml`) are
+reserved by `.gitignore` but not read yet.

@@ -1,8 +1,8 @@
 # DevAtlas architecture
 
-Status: slice 01 (application bootstrap). This document describes what exists
-now and the boundaries later slices are expected to respect. Anything listed
-under "planned" is not implemented.
+Status: slice 02 (project and checkout registration). This document describes
+what exists now and the boundaries later slices are expected to respect.
+Anything listed under "planned" is not implemented.
 
 ## Purpose
 
@@ -16,20 +16,31 @@ cloud service for inventory, status collection, or diagnostics.
 
 ```text
 cmd/devatlas/main.go        process entry; delegates to internal/cli
-internal/cli                 argument parsing, exit codes, SIGINT/SIGTERM handling
+internal/cli                 argument parsing, exit codes, SIGINT/SIGTERM handling,
+                             add / list / remove / serve / version commands
+internal/registry            domain model: Project, Checkout, Registry; identity
+                             rules, validation, canonical paths, stable IDs. No I/O
+                             beyond resolving a directory path.
+internal/registryfile        persistence: versioned YAML file under the user config
+                             directory, atomic writes, flock-based updates, path
+                             resolution (-config flag, DEVATLAS_CONFIG, default)
 internal/httpserver          loopback listener, timeouts, graceful shutdown,
-                             GET /health, GET / (html/template, embedded)
+                             GET /health, GET /api/projects, GET / (html/template)
 internal/version             version string, VCS commit from Go build info
 ```
 
 Dependency direction is strictly inward:
 
 ```text
-cmd/devatlas -> internal/cli -> internal/httpserver -> internal/version
+cmd/devatlas -> cli -> httpserver -> registryfile -> registry -> (stdlib)
+                  \-> registryfile      \-> registry      \-> yaml
+                  \-> registry          \-> version
 ```
 
-Only the standard library is used. The `internal/` prefix keeps every package
-private to this module.
+`httpserver` depends on `registryfile` only through the `RegistrySource`
+interface (`Load`, `Path`), which the file store satisfies. The one external
+module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The `internal/`
+prefix keeps every package private to this module.
 
 ### Design decisions already in force
 
@@ -53,6 +64,25 @@ private to this module.
   that do not exist. Update it in every slice.
 - **Facts carry time.** `/health` already includes `checked_at`; every future
   observation must carry its source and collection time, per the brief.
+- **Project and checkout are separate identities.** A project is an explicit,
+  user-chosen ID with a display name. A checkout is a canonical directory
+  (absolute, symlinks resolved) with a stable ID derived from that path. One
+  project may have many checkouts; one directory belongs to one checkout.
+  Nothing is inferred from directory names or Git remotes.
+- **One shared read model.** `registry.Registry.Views()` feeds
+  `httpserver.BuildProjectsResponse`, which the CLI (`list`, `list -json`),
+  the JSON API, and the HTML template all render. There is exactly one place
+  that decides what a checkout looks like to a user.
+- **Status is never invented.** Until collectors exist, every checkout's
+  runtime status is `unknown` with an explicit "not collected" reason. The
+  only observed fact is whether the directory exists, stamped with the time
+  of the stat.
+- **Registry writes are serialised and atomic.** `registryfile.Store.Update`
+  takes an advisory lock, loads, applies the change, validates, writes a temp
+  file, and renames it over the original. A malformed file fails the
+  operation and is never rewritten.
+- **Read-only HTTP.** The server exposes GET only. Registrations change
+  through the CLI, which is also where the lock and validation live.
 
 ## Intended package layout and adapter boundaries (planned)
 
@@ -61,15 +91,16 @@ requires every observation to carry source, status, and collection time.
 The planned layout mirrors that:
 
 ```text
-internal/registry     domain model: Project, Checkout, Runtime, Service,
-                      PortBinding, Observation, Finding; status vocabulary
-                      (running, stopped, unhealthy, unknown, error) and
-                      staleness rules. No I/O.
-internal/manifest     parse and validate project-registry.yaml and the
-                      Git-ignored local configuration; path resolution.
+internal/registry     (exists) grows Runtime, Service, PortBinding,
+                      Observation, Finding; status vocabulary (running,
+                      stopped, unhealthy, unknown, error) and staleness rules.
+internal/registryfile (exists) stays the source of truth for registrations.
+internal/manifest     parse and validate project-registry.yaml found in a
+                      registered checkout; document path resolution.
 internal/store        SQLite index and observation history. Rebuildable from
                       registrations, manifests, and fresh observations;
-                      never the source of truth for documents.
+                      never the source of truth for registrations or
+                      documents.
 internal/collect      collector interfaces plus one adapter per source:
   collect/git         branch, HEAD, dirty/untracked counts, worktrees,
                       remote identification with credentials stripped.
@@ -107,8 +138,10 @@ Boundary rules for adapters:
 ## Verification approach
 
 Unit tests cover argument errors, loopback enforcement, health output, the
-home page, occupied-port reporting, and graceful shutdown with an in-flight
-request. Later slices add tests for port-conflict logic, checkout identity,
-status and staleness modelling, and secret exclusion, using controlled
-fixtures for Git and Docker, plus at least one flow verified against a real
-local project.
+home page, occupied-port reporting, graceful shutdown with an in-flight
+request, checkout identity (symlinks, relative paths, worktrees), project
+name rules, safe removal, persistence across reloads, malformed-file
+handling, concurrent updates, HTML escaping of project names, and the
+read-only API. Later slices add tests for port-conflict logic, status and
+staleness modelling, and secret exclusion, using controlled fixtures for Git
+and Docker, plus at least one flow verified against a real local project.

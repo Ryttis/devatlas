@@ -17,22 +17,27 @@ import (
 
 // Server is a configured, not yet listening, DevAtlas HTTP server.
 type Server struct {
-	cfg     Config
-	log     *slog.Logger
-	http    *http.Server
-	started time.Time
+	cfg      Config
+	log      *slog.Logger
+	registry RegistrySource
+	http     *http.Server
+	started  time.Time
 }
 
-// New builds a server from cfg. It returns an error if cfg is invalid; no
-// socket is opened until Listen is called.
-func New(cfg Config, log *slog.Logger) (*Server, error) {
+// New builds a server from cfg that presents the registrations provided by
+// src. It returns an error if cfg is invalid or src is nil; no socket is
+// opened until Listen is called.
+func New(cfg Config, src RegistrySource, log *slog.Logger) (*Server, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+	if src == nil {
+		return nil, errors.New("httpserver: registry source is nil")
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{cfg: cfg, log: log}
+	s := &Server{cfg: cfg, log: log, registry: src}
 	s.http = &http.Server{
 		Handler: s.routes(),
 		// Timeouts protect the process from slow or stalled clients. The

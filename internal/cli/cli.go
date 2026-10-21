@@ -27,12 +27,19 @@ const (
 const usageText = `DevAtlas — local project registry.
 
 Usage:
-  devatlas <command> [flags]
+  devatlas <command> [flags] [arguments]
 
 Commands:
+  add       Register a directory as a checkout of a project.
+  list      List registered projects and their checkouts.
+  remove    Remove a checkout registration by ID (never touches files).
   serve     Start the local HTTP server (loopback only).
   version   Print build information.
   help      Show this help.
+
+Registrations are stored in a YAML file under the user configuration
+directory (~/.config/devatlas/registrations.yaml). Override the location
+with -config PATH on any command or with the DEVATLAS_CONFIG variable.
 
 Run "devatlas <command> -h" for command flags.
 `
@@ -57,6 +64,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runVersion(rest, stdout, stderr)
 	case "serve":
 		return runServe(ctx, rest, stderr)
+	case "add":
+		return runAdd(rest, stdout, stderr)
+	case "list":
+		return runList(rest, stdout, stderr)
+	case "remove":
+		return runRemove(rest, stdout, stderr)
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usageText)
 		return ExitOK
@@ -94,6 +107,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "TCP port to bind (0 picks a free port)")
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "time allowed for in-flight requests on shutdown")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
+	configFlag := addConfigFlag(fs)
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: devatlas serve [flags]")
 		fmt.Fprintln(stderr, "Start the DevAtlas HTTP server. It only ever binds to a loopback address.")
@@ -119,9 +133,20 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 		return ExitUsage
 	}
 
-	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
+	store, err := openStore(*configFlag, stderr)
+	if err != nil {
+		return ExitFailure
+	}
+	// Fail early on a malformed registration file instead of serving errors.
+	if _, err := store.Load(); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return ExitFailure
+	}
 
-	srv, err := httpserver.New(cfg, logger)
+	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
+	logger.Info("using registration file", "path", store.Path())
+
+	srv, err := httpserver.New(cfg, store, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return ExitUsage

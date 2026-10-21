@@ -12,6 +12,9 @@
     code { font-family: ui-monospace, monospace; }
     section { margin-top: 1.5rem; }
     ul { padding-left: 1.25rem; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
+    th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.4); vertical-align: top; }
+    .warn { border: 1px solid #c60; padding: 0.5rem 0.75rem; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -27,6 +30,35 @@
       <li>Health endpoint: <a href="/health"><code>GET /health</code></a></li>
       <li>Page rendered at <code>{{.Now.Format "2006-01-02T15:04:05Z07:00"}}</code></li>
     </ul>
+  </section>
+
+  <section>
+    <h2>Registered projects</h2>
+    <p class="muted">Source: <code>{{.RegistryFile}}</code>, read at <code>{{.Now.Format "2006-01-02T15:04:05Z07:00"}}</code>.
+      Runtime status has not been collected: this build records registrations only, so every checkout is <code>unknown</code>.</p>
+    {{if .RegistryError}}
+    <p class="warn">The registration file could not be loaded and was left untouched: <code>{{.RegistryError}}</code></p>
+    {{else if not .Registrations.Projects}}
+    <p>No projects registered yet. Register one with <code>devatlas add -project &lt;id&gt; -name "&lt;name&gt;" &lt;directory&gt;</code>.</p>
+    {{else}}
+    <table>
+      <thead><tr><th>Project</th><th>Checkout ID</th><th>Path</th><th>Directory</th><th>Runtime</th></tr></thead>
+      <tbody>
+      {{range .Registrations.Projects}}{{$p := .}}
+        {{range .Checkouts}}
+        <tr>
+          <td>{{$p.Name}} <span class="muted">({{$p.ID}})</span></td>
+          <td><code>{{.ID}}</code></td>
+          <td><code>{{.Path}}</code></td>
+          <td>{{if .PathExists}}present{{else}}missing{{end}}</td>
+          <td>{{.Runtime.Status}}</td>
+        </tr>
+        {{end}}
+      {{end}}
+      </tbody>
+    </table>
+    <p class="muted">JSON: <a href="/api/projects"><code>GET /api/projects</code></a>. "Directory" is a stat of the path at page render time; "Runtime" is always <code>unknown</code> in this build.</p>
+    {{end}}
   </section>
 
   <section>

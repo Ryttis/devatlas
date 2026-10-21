@@ -40,16 +40,17 @@ type Scope struct {
 // CurrentScope returns the implementation status of this build.
 func CurrentScope() Scope {
 	return Scope{
-		Slice: "01 — application bootstrap",
+		Slice: "02 — project and checkout registration",
 		Implemented: []string{
-			"devatlas CLI with version and serve commands",
+			"devatlas CLI: version, serve, add, list, remove",
 			"loopback-only HTTP server with configurable port and graceful shutdown",
 			"GET /health JSON endpoint",
-			"this server-rendered home page",
+			"registration of existing directories as checkouts of explicitly named projects, persisted in a YAML file under the user configuration directory",
+			"GET /api/projects (read-only) and the registration table on this page, reloaded from the file on every request",
 		},
 		Deferred: []string{
 			"SQLite index and observation history",
-			"project registration and project-registry.yaml loading",
+			"project-registry.yaml manifest loading and directory scanning",
 			"Git checkout and worktree collection",
 			"Docker Compose and container status collection",
 			"port-conflict analysis",
@@ -62,6 +63,7 @@ func CurrentScope() Scope {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /api/projects", s.handleProjects)
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	return mux
 }
@@ -96,14 +98,27 @@ type homeData struct {
 	Scope    Scope
 	BindAddr string
 	Now      time.Time
+	// Registrations is nil when loading failed; RegistryError then explains why.
+	Registrations *ProjectsResponse
+	RegistryError string
+	RegistryFile  string
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
 	data := homeData{
-		Version:  version.Current(),
-		Scope:    CurrentScope(),
-		BindAddr: s.cfg.Addr(),
-		Now:      time.Now().UTC(),
+		Version:      version.Current(),
+		Scope:        CurrentScope(),
+		BindAddr:     s.cfg.Addr(),
+		Now:          now.UTC(),
+		RegistryFile: s.registry.Path(),
+	}
+	if reg, err := s.registry.Load(); err != nil {
+		s.log.Warn("load registrations", "err", err)
+		data.RegistryError = err.Error()
+	} else {
+		resp := BuildProjectsResponse(reg.Views(), s.registry.Path(), now)
+		data.Registrations = &resp
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
