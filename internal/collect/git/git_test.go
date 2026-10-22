@@ -22,15 +22,21 @@ func requireGit(t *testing.T) string {
 	return p
 }
 
-// run executes git in dir for test setup only.
-func run(t *testing.T, dir string, args ...string) string {
-	t.Helper()
+// setupGitCommand supplies an isolated identity for test setup commands.
+func setupGitCommand(dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
 	)
+	return cmd
+}
+
+// run executes git in dir for test setup only.
+func run(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := setupGitCommand(dir, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -163,8 +169,20 @@ func TestConflictedAndDetached(t *testing.T) {
 	run(t, dir, "checkout", "-q", "main")
 	write(t, filepath.Join(dir, "f.txt"), "main\n")
 	commitAll(t, dir, "main")
-	if err := exec.Command("git", "-C", dir, "merge", "other").Run(); err == nil {
-		t.Fatal("merge should conflict")
+	out, err := setupGitCommand(dir, "merge", "other").CombinedOutput()
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("merge should conflict with exit 1: %v\n%s", err, out)
+	}
+	t.Logf("merge output:\n%s", out)
+	// A failed command alone does not prove the conflict fixture was created.
+	unmerged := strings.Split(run(t, dir, "ls-files", "--unmerged"), "\n")
+	if len(unmerged) != 3 {
+		t.Fatalf("want three unmerged index stages for f.txt, got %q\n%s", unmerged, out)
+	}
+	for i, entry := range unmerged {
+		if !strings.HasSuffix(entry, " "+string(rune('1'+i))+"\tf.txt") {
+			t.Fatalf("unexpected unmerged index stage: %q\n%s", entry, out)
+		}
 	}
 	c, _ := newCollector(t, Options{})
 	repo := observeOK(t, c, dir)
