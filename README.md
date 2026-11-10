@@ -404,9 +404,11 @@ may run for 10 seconds and all commands for one checkout for 20 seconds
 together; `list` additionally caps a whole run at 2 minutes. A command whose
 standard output exceeds 8 MiB fails the observation rather than being
 truncated. Git runs in its own process group and the whole group is killed on
-timeout or cancellation. Up to 2 KiB of a failed command's stderr is written
-to the server or CLI log; it is never part of a response. One checkout's
-failure never affects another's observation.
+timeout or cancellation. Git stderr helps classify command failures. Server
+and CLI logs contain only safe diagnostic metadata, such as the subcommand,
+status, exit code, and byte counts. Raw stderr and parser excerpts are never
+logged or returned in responses. One checkout's failure never affects
+another's observation.
 
 ## Dependencies
 
