@@ -109,7 +109,9 @@ module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The
   redirecting environment variables, bounds time, output, and concurrency,
   kills the process group on cancellation, and sanitises remote URLs before
   they enter the observation. Failure reasons shown to users are classified
-  text; raw stderr goes to the log only. It never fetches, checks out,
+  text. Git stderr helps classify command failures. Logs contain only safe
+  diagnostic metadata; raw stderr and parser excerpts are excluded from logs
+  and responses. It never fetches, checks out,
   stages, commits, or edits configuration, and it never groups projects by
   remote.
 

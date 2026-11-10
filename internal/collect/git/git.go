@@ -281,19 +281,38 @@ func (c *Collector) cancelled(start time.Time, ctx context.Context) Observation 
 	return o
 }
 
-// failure maps a command error to a status and a safe reason.
+// parseError reports that the output of a successful git command could not be
+// interpreted. It deliberately carries no part of that output: remote URLs,
+// paths, and anything else Git printed may contain credentials.
+type parseError struct {
+	subcommand  string
+	outputBytes int
+}
+
+func (e *parseError) Error() string {
+	return fmt.Sprintf("git %s: output could not be interpreted", e.subcommand)
+}
+
+// failure maps a command error to a status and a safe reason, and logs a
+// warning made only of fixed text and safe metadata. Raw Git stderr and
+// parser error strings are never logged, because either can quote Git output
+// that contains credentials.
 func (c *Collector) failure(obs Observation, err error) Observation {
 	var ce *commandError
+	var pe *parseError
 	obs.Repository = nil
 	switch {
 	case errors.As(err, &ce):
 		obs.Status, obs.Reason = ce.status, ce.reason
 		if ce.stderr != "" {
-			c.opts.Logger.Warn("git command failed", "subcommand", ce.subcommand, "status", string(ce.status), "exit", ce.exitCode, "stderr", ce.stderr)
+			c.opts.Logger.Warn("git command failed", "subcommand", ce.subcommand, "status", string(ce.status), "exit", ce.exitCode, "stderr_bytes", len(ce.stderr))
 		}
+	case errors.As(err, &pe):
+		obs.Status, obs.Reason = StatusError, "git output could not be interpreted"
+		c.opts.Logger.Warn("git output could not be interpreted", "subcommand", pe.subcommand, "status", string(obs.Status), "output_bytes", pe.outputBytes)
 	default:
 		obs.Status, obs.Reason = StatusError, "git output could not be interpreted"
-		c.opts.Logger.Warn("git output could not be interpreted", "err", err.Error())
+		c.opts.Logger.Warn("git output could not be interpreted", "status", string(obs.Status))
 	}
 	return obs
 }
@@ -305,7 +324,7 @@ func (c *Collector) layout(ctx context.Context, path string) (*Repository, error
 	}
 	lines := splitLines(out)
 	if len(lines) != 3 {
-		return nil, fmt.Errorf("rev-parse: expected 3 lines, got %d", len(lines))
+		return nil, &parseError{subcommand: "rev-parse", outputBytes: len(out)}
 	}
 	repo := &Repository{WorktreeRoot: lines[0], GitDir: lines[1], CommonDir: lines[2]}
 	repo.LinkedWorktree = repo.GitDir != repo.CommonDir
@@ -321,7 +340,8 @@ func (c *Collector) status(ctx context.Context, path string, repo *Repository) e
 	}
 	head, changes, err := parseStatusV2(out)
 	if err != nil {
-		return err
+		// The parser's message quotes the offending record; drop it.
+		return &parseError{subcommand: "status", outputBytes: len(out)}
 	}
 	repo.Head, repo.Changes = head, changes
 	return nil
