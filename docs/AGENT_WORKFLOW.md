@@ -44,6 +44,10 @@ The command below runs the saved roles on demand. The DevAtlas HTTP service
 remains read-only; it does not start agents or display runs. There is no
 scheduler, automatic retry, push, merge, or deployment.
 
+The optional [agent status connector](../connector/README.md) reads the
+runner's saved states for an OAuth-authenticated MCP client. It runs separately
+from both the runner and the inventory server.
+
 ## Run one task
 
 Use a trusted DevAtlas clone and a trusted task Markdown file. Write the scope,
