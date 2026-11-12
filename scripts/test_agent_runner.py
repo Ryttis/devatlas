@@ -23,7 +23,16 @@ if name == 'claude':
         assert 'ANTHROPIC_API_KEY' not in os.environ
         assert subprocess.check_output(['git', 'remote'], text=True) == ''
         answer = pathlib.Path('answer.txt')
-        answer.write_text((answer.read_text() if mode == 'workflow_pass' else '') + 'updated\n')
+        if mode in ('workflow_retry', 'workflow_retry_limit'):
+            if 'Correct the unpublished candidate' in args[-1]:
+                assert 'Replace the provisional text.' in args[-1]
+                assert answer.read_text().endswith('provisional\n')
+                answer.write_text(answer.read_text().replace('provisional\n', 'updated\n'))
+            else:
+                answer.write_text(answer.read_text() + (
+                    'provisional\n' if 'Change slice 1' in args[-1] else 'updated\n'))
+        else:
+            answer.write_text((answer.read_text() if mode == 'workflow_pass' else '') + 'updated\n')
         print(json.dumps({'subtype': 'success', 'is_error': False}))
 elif name == 'go' and args[:1] == ['test'] and mode == 'test_failure':
     print('fake Go test failure')
@@ -73,6 +82,10 @@ elif name == 'codex':
         result = {'verdict': 'pass', 'summary': 'Reviewed change.', 'findings': []}
         if mode == 'findings':
             result.update(verdict='changes_requested', findings=['A specific issue.'])
+        if mode == 'workflow_retry_limit' or (
+            mode == 'workflow_retry' and pathlib.Path('answer.txt').read_text().endswith('provisional\n')
+        ):
+            result.update(verdict='changes_requested', findings=['Replace the provisional text.'])
         if mode == 'invalid_review':
             result.update(verdict='pass', findings=['Contradictory result.'])
         pathlib.Path(args[args.index('--output-last-message') + 1]).write_text(json.dumps(result))
@@ -201,6 +214,45 @@ class AgentRunnerTest(unittest.TestCase):
         status = json.loads((job / "workflow.json").read_text())
         self.assertEqual((status["status"], status["tester"], status["completed"]), ("BLOCKED", "FAIL", []))
         self.assertEqual(len(list((self.root / "state/devatlas/agent-runs").glob("run-*"))), 1)
+
+    def test_rejected_candidate_is_replaced_and_retained_in_audit(self):
+        job, digest = self.workflow_plan("workflow_retry")
+        result = self.workflow_command("workflow_retry", "run", job, "--approve", digest)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("FIX_REQUIRED", result.stdout)
+        status = json.loads((job / "workflow.json").read_text())
+        self.assertEqual(status["status"], "PASSED")
+        rejected, fixed, second = status["attempts"]
+        self.assertEqual([(a["slice"], a["attempt"], a["review"]) for a in status["attempts"]],
+                         [(1, 1, "changes_requested"), (1, 2, "pass"), (2, 1, "pass")])
+        self.assertEqual(rejected["base"], self.base)
+        self.assertEqual(fixed["base"], self.base)
+        self.assertNotEqual(rejected["head"], fixed["head"])
+        self.assertEqual(second["base"], fixed["head"])
+        self.assertEqual([item["head"] for item in status["completed"]], [fixed["head"], second["head"]])
+        checkout = job / "checkout"
+        history = sp.check_output(["git", "rev-list", f"{self.base}..HEAD"], cwd=checkout, text=True)
+        self.assertEqual(history.splitlines(), [second["head"], fixed["head"]])
+        pinned = sp.check_output(["git", "rev-parse", rejected["ref"]], cwd=checkout, text=True).strip()
+        self.assertEqual(pinned, rejected["head"])
+        runs = self.root / "state/devatlas/agent-runs"
+        rejected_job = runs / rejected["run_id"]
+        self.assertFalse((rejected_job / "tester.json").exists())
+        self.assertFalse((rejected_job / "architect-handoff.json").exists())
+        report = json.loads((rejected_job / "review.json").read_text())
+        self.assertEqual(report["findings"], ["Replace the provisional text."])
+        self.assertEqual((checkout / "answer.txt").read_text(), "base\nupdated\nupdated\n")
+
+    def test_repeated_rejection_pauses_at_correction_limit(self):
+        job, digest = self.workflow_plan("workflow_retry_limit")
+        result = self.workflow_command("workflow_retry_limit", "run", job, "--approve", digest)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        status = json.loads((job / "workflow.json").read_text())
+        self.assertEqual((status["status"], status["reason"], status["completed"]),
+                         ("PAUSED_FOR_HUMAN", "correction_limit", []))
+        self.assertEqual([(a["slice"], a["attempt"], a["review"]) for a in status["attempts"]],
+                         [(1, 1, "changes_requested"), (1, 2, "changes_requested")])
+        self.assertTrue(all("ref" in a for a in status["attempts"]))
 
     def test_functional_failure_cannot_be_overridden_by_tester(self):
         job, digest = self.workflow_plan("functional_failure")

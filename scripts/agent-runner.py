@@ -82,7 +82,8 @@ def save_json(path, data):
     tmp.replace(path)
 
 
-def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snapshot=None):
+def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snapshot=None,
+        correction=None):
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", revision):
         raise ValueError("BASE must be a Git commit SHA (at least seven hex characters)")
     if not task.is_file() or task.stat().st_size > 32768:
@@ -99,6 +100,7 @@ def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snaps
 
     job = job_dir if job_dir is not None else Path(tempfile.mkdtemp(prefix="run-", dir=runs))
     checkout = working_checkout or job / "checkout"
+    start = correction["head"] if correction else base
     state = {"run_id": job.name, "base": base, "head": None}
 
     def mark(stage, **details):
@@ -115,9 +117,9 @@ def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snaps
                 str(ROOT), str(checkout))
             git(checkout, env, "remote", "remove", "origin")
             git(checkout, env, "switch", "--detach", base)
-        elif (git(checkout, env, "rev-parse", "HEAD") != base
+        elif (git(checkout, env, "rev-parse", "HEAD") != start
               or git(checkout, env, "status", "--porcelain")):
-            raise RuntimeError("Expected a clean workflow checkout at the approved base")
+            raise RuntimeError("Expected a clean workflow checkout at the starting commit")
         claude_status, _ = command(["claude", "auth", "status"], checkout, env)
         codex_status = command(["codex", "login", "status"], checkout, env)
         auth = json.loads(claude_status)
@@ -126,6 +128,19 @@ def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snaps
         if "logged in using chatgpt" not in " ".join(codex_status).lower():
             raise RuntimeError("Codex must be signed in with ChatGPT")
 
+        coder_task = description
+        if correction:
+            if working_checkout is None or git(checkout, env, "rev-parse", f"{start}^") != base:
+                raise RuntimeError("Correction must replace a candidate directly on the approved base")
+            save_json(job / "correction.json", correction)
+            # The workflow has pinned the rejected commit. Keep its files for
+            # the coder, but make the replacement a single commit on the base.
+            git(checkout, env, "reset", "--soft", base)
+            coder_task += (
+                f"\n\nCorrect the unpublished candidate {start} already in the working tree. "
+                "Address these review findings within the approved slice scope:\n"
+                + json.dumps(correction["findings"], ensure_ascii=False)
+            )
         mark("coding")
         tools = "Read,Glob,Grep,Edit,Write"
         with (job / "coder.json").open("w") as out, (job / "coder.log").open("w") as err:
@@ -133,7 +148,7 @@ def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snaps
                      "--allowedTools", tools, "--strict-mcp-config", "--mcp-config",
                      '{"mcpServers":{}}', "--max-turns", str(coder["max_turns"]),
                      "--output-format", "json", "-p",
-                     f"{coder['instructions']}\nBase commit: {base}\n\n{description}"],
+                     f"{coder['instructions']}\nBase commit: {base}\n\n{coder_task}"],
                     checkout, env, coder["timeout_seconds"], out, err)
         result = json.loads((job / "coder.json").read_text(encoding="utf-8"))
         if (not isinstance(result, dict) or result.get("subtype") != "success" or
@@ -145,6 +160,8 @@ def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snaps
         tree = git(checkout, env, "write-tree")
         if tree == git(checkout, env, "rev-parse", f"{base}^{{tree}}"):
             raise RuntimeError("Coder produced no changes")
+        if correction and tree == git(checkout, env, "rev-parse", f"{start}^{{tree}}"):
+            raise RuntimeError("Coder did not change the rejected candidate")
 
         mark("verifying")
         git(checkout, env, "diff", "--cached", "--check")
@@ -169,11 +186,11 @@ def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snaps
             "user.email=devatlas-runner@localhost", "-c", "commit.gpgsign=false",
             "commit", "-m", "Implement DevAtlas task")
         head = git(checkout, env, "rev-parse", "HEAD")
+        mark("reviewing", head=head)
         with (job / "change.patch").open("w") as patch:
             command(["git", "format-patch", "--stdout", "--binary", f"{base}..{head}"],
                     checkout, env, stdout=patch)
 
-        mark("reviewing", head=head)
         schema, review = job / "review-schema.json", job / "review.json"
         save_json(schema, REVIEW_SCHEMA)
         with (job / "review.log").open("w") as log:

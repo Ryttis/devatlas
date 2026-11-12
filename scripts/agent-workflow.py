@@ -112,7 +112,7 @@ def state(job, status, **details):
     print(f"{status}: {job}", flush=True)
 
 
-def prepare(task, base, workflows, env):
+def prepare(task, base, workflows, env, max_corrections):
     request = read(task).decode("utf-8").strip()
     if not request:
         raise ValueError("Task is empty")
@@ -134,7 +134,8 @@ def prepare(task, base, workflows, env):
         plan = codex(roles["architect"], request, PLAN, job, "architect", checkout, env)
         validate_plan(plan)
         snapshot = job / "plan.json"
-        save(snapshot, {"task": request, "base": base, "branch": branch, "roles": roles, "plan": plan})
+        save(snapshot, {"task": request, "base": base, "branch": branch, "roles": roles, "plan": plan,
+                        "max_corrections": max_corrections})
         digest = hashlib.sha256(read(snapshot, 131072)).hexdigest()
         state(job, "AWAITING_APPROVAL", plan_sha256=digest)
         print(f"Review {snapshot}\nApproval SHA-256: {digest}")
@@ -175,6 +176,47 @@ def functional_checks(checks, run_job, env):
     return results
 
 
+def review_slice(job, checkout, branch, head, index, item, roles, max_corrections, runs, env, progress):
+    correction = None
+    for attempt in range(1, max_corrections + 2):
+        checkout_at(checkout, branch, correction["head"] if correction else head, env)
+        run_job = Path(tempfile.mkdtemp(prefix="run-", dir=runs))
+        record = {"slice": index, "attempt": attempt, "run_id": run_job.name,
+                  "base": head, "head": None, "review": None}
+        progress["attempts"].append(record)
+        progress.update(slice=index, run_id=run_job.name, review=None, tester=None, candidate=None)
+        state(job, "RUNNING", **progress)
+        task = run_job / "slice-input.md"
+        task.write_text(f"{item['task']}\n\nAcceptance criteria:\n{json.dumps(item['checks'])}\n",
+                        encoding="utf-8")
+        code = runner["run"](task, head, runs, working_checkout=checkout, job_dir=run_job,
+                             role_snapshot=roles, correction=correction)
+        review = json.loads(read(run_job / "state.json"))
+        candidate, verdict = review.get("head"), review["stage"]
+        record.update(head=candidate, review=verdict)
+        progress.update(review=verdict, candidate=candidate)
+        if (code, verdict) not in ((0, "pass"), (2, "changes_requested")):
+            state(job, "BLOCKED", **progress)
+            return None
+        if not isinstance(candidate, str) or not SHA.fullmatch(candidate):
+            raise RuntimeError("Review did not identify the candidate SHA")
+        checkout_at(checkout, branch, candidate, env)
+        if git(checkout, env, "rev-parse", f"{candidate}^") != head:
+            raise RuntimeError("Candidate does not directly follow the previous accepted commit")
+        if verdict == "pass":
+            return run_job, candidate, verdict
+        report = json.loads(read(run_job / "review.json"))
+        # Keep rejected objects reachable even after the task branch moves.
+        ref = f"refs/devatlas/candidates/{run_job.name}"
+        git(checkout, env, "update-ref", ref, candidate, "0" * 40)
+        record["ref"] = ref
+        if attempt > max_corrections:
+            state(job, "PAUSED_FOR_HUMAN", reason="correction_limit", **progress)
+            return None
+        correction = {"head": candidate, "run_id": run_job.name, "findings": report["findings"]}
+        state(job, "FIX_REQUIRED", **progress)
+
+
 def execute(job, approval, runs, env):
     previous = json.loads(read(job / "workflow.json"))
     if previous["status"] != "AWAITING_APPROVAL":
@@ -184,36 +226,25 @@ def execute(job, approval, runs, env):
         raise ValueError("Approval does not match the exact saved plan")
     snapshot = json.loads(raw)
     validate_plan(snapshot["plan"])
+    max_corrections = snapshot.get("max_corrections", 0)
+    if type(max_corrections) is not int or not 0 <= max_corrections <= 2:
+        raise ValueError("Invalid correction limit")
     checkout, head, branch = job / "checkout", snapshot["base"], snapshot["branch"]
     if not SHA.fullmatch(head) or branch != f"devatlas/{job.name}":
         raise ValueError("Invalid checkout identity")
     checkout_at(checkout, branch, head, env)
     completed = []
-    progress = {"plan_sha256": approval, "completed": completed}
+    progress = {"plan_sha256": approval, "completed": completed, "attempts": []}
     save(job / "approval.json", {"plan_sha256": approval,
                                  "approved_at": datetime.now(timezone.utc).isoformat()})
     state(job, "RUNNING", **progress)
     try:
         for index, item in enumerate(snapshot["plan"]["slices"], 1):
-            run_job = Path(tempfile.mkdtemp(prefix="run-", dir=runs))
-            progress.update(slice=index, run_id=run_job.name, review=None, tester=None, candidate=None)
-            state(job, "RUNNING", **progress)
-            task = run_job / "slice-input.md"
-            task.write_text(f"{item['task']}\n\nAcceptance criteria:\n{json.dumps(item['checks'])}\n",
-                            encoding="utf-8")
-            code = runner["run"](task, head, runs, working_checkout=checkout, job_dir=run_job,
-                                 role_snapshot=snapshot["roles"])
-            review = json.loads(read(run_job / "state.json"))
-            candidate = review.get("head")
-            progress.update(review=review["stage"], candidate=candidate)
-            if code != 0 or review["stage"] != "pass":
-                state(job, "BLOCKED", **progress)
+            accepted = review_slice(job, checkout, branch, head, index, item, snapshot["roles"],
+                                    max_corrections, runs, env, progress)
+            if accepted is None:
                 return 2
-            if not isinstance(candidate, str) or not SHA.fullmatch(candidate):
-                raise RuntimeError("Review did not identify the candidate SHA")
-            checkout_at(checkout, branch, candidate, env)
-            if git(checkout, env, "rev-parse", f"{candidate}^") != head:
-                raise RuntimeError("Candidate does not directly follow the previous accepted commit")
+            run_job, candidate, verdict = accepted
             state(job, "TESTING", **progress)
             results = functional_checks(item["checks"], run_job, env)
             changed, _ = command(
@@ -227,7 +258,7 @@ def execute(job, approval, runs, env):
             )
             evidence = {"base": head, "head": candidate, "changed_files": changed.split("\0")[:-1],
                         "diff_excerpt": diff[:8000], "diff_truncated": len(diff) > 8000,
-                        "review": review["stage"], "checks": results}
+                        "review": verdict, "checks": results}
             save(run_job / "functional-checks.json", evidence)
             tester = codex(snapshot["roles"]["tester"],
                            f"Assess slice {index}: {item['task']}\nEvidence:\n{json.dumps(evidence)}",
@@ -273,6 +304,8 @@ def main():
     plan = sub.add_parser("plan")
     plan.add_argument("task", type=Path)
     plan.add_argument("base")
+    plan.add_argument("--max-corrections", type=int, choices=range(3), default=1,
+                      help="same-slice corrections after a rejected review (default: 1)")
     run = sub.add_parser("run")
     run.add_argument("job", type=Path)
     run.add_argument("--approve", required=True)
@@ -288,7 +321,7 @@ def main():
         with (runs / ".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if args.action == "plan":
-                prepare(args.task, args.base, workflows, env)
+                prepare(args.task, args.base, workflows, env, args.max_corrections)
                 return 0
             job = args.job.resolve(strict=True)
             if job.parent != workflows or not re.fullmatch(r"task-[A-Za-z0-9_-]+", job.name):
