@@ -3,6 +3,7 @@ package httpserver
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"time"
 )
 
@@ -18,6 +19,8 @@ const (
 
 // Config holds the HTTP server settings.
 type Config struct {
+	// StateDir selects runner history independently of the project registry.
+	StateDir string
 	// Host is the IP address to bind. It must be a loopback address such as
 	// 127.0.0.1 or ::1; DevAtlas never listens on other interfaces.
 	Host string
@@ -40,6 +43,9 @@ func DefaultConfig() Config {
 
 // Validate checks the configuration without opening any socket.
 func (c Config) Validate() error {
+	if c.StateDir != "" && !filepath.IsAbs(c.StateDir) {
+		return fmt.Errorf("state directory must be absolute")
+	}
 	if err := validateLoopbackHost(c.Host); err != nil {
 		return err
 	}

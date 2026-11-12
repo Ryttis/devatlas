@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Ryttis/devatlas/internal/collect/git"
+	"github.com/Ryttis/devatlas/internal/runhistory"
 	"github.com/Ryttis/devatlas/internal/version"
 )
 
@@ -24,6 +25,7 @@ type Server struct {
 	git      GitObserver
 	http     *http.Server
 	started  time.Time
+	history  runhistory.Store
 }
 
 // New builds a server from cfg that presents the registrations provided by
@@ -40,6 +42,15 @@ func New(cfg Config, src RegistrySource, log *slog.Logger) (*Server, error) {
 		log = slog.Default()
 	}
 	s := &Server{cfg: cfg, log: log, registry: src}
+	stateDir := cfg.StateDir
+	if stateDir == "" {
+		var err error
+		stateDir, err = runhistory.DefaultDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	s.history = runhistory.Store{Dir: stateDir}
 	s.git = git.NewCollector(git.Options{Logger: log})
 	s.http = &http.Server{
 		Handler: s.routes(),

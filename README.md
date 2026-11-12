@@ -5,13 +5,17 @@ locally developed projects, their actual runtime status, and project context
 for the developer and AI coding agents. It targets Windows 11 + WSL2 and runs
 as one Go process inside WSL.
 
-**Current state: slice 03, read-only Git checkout observations.** This build
+**Current state: read-only execution console and slice 03 Git observations.**
+The home page now lists saved agent runs and workflows, with detail pages for
+reviewer findings and tester summaries. The project inventory is at `/projects`.
+See [docs/AGENT_CONSOLE.md](docs/AGENT_CONSOLE.md) for state paths, limits and deployment.
+This build
 provides the `devatlas` CLI, a loopback-only HTTP server with a JSON health
 endpoint, persistent registration of existing project directories as
 checkouts of explicitly named projects, and a read-only Git observation for
 each checkout (worktree root, branch or detached HEAD, commit, change counts,
 sanitised remotes) collected by running the local `git` command whenever
-`devatlas list`, `GET /api/projects`, or the HTML home page is produced. It
+`devatlas list`, `GET /api/projects`, or the HTML `/projects` page is produced. It
 does not yet read `project-registry.yaml`, scan directories, talk to Docker,
 analyse ports, run HTTP checks, show ahead/behind counts, or export context;
 every checkout's runtime status is reported as `unknown` with the reason
@@ -208,6 +212,7 @@ checkouts:
 | `-shutdown-timeout` | `10s`       | Time allowed for in-flight requests after SIGINT/SIGTERM. |
 | `-log-level`        | `info`      | `debug`, `info`, `warn`, or `error`.                      |
 | `-config`           | see above   | Registration file to serve.                               |
+| `-state-dir`        | XDG state directory | Absolute runner state root; independent of `-config`. |
 
 Exit codes: `0` success, `1` runtime failure (port already in use, duplicate
 directory, unknown checkout ID, malformed registration file), `2` invalid
@@ -274,7 +279,9 @@ conflicts on your machine.
 
 | Method and path | Response                                                  |
 | --------------- | --------------------------------------------------------- |
-| `GET /`         | HTML home page: registered projects and checkouts with Git columns, build info, implementation scope |
+| `GET /`, `GET /runs` | Execution console; `kind=run` or `kind=workflow`, `page=1` filters/pagination |
+| `GET /runs/{id}` | Saved state, commit IDs, reviewer findings, tester summary or linked workflow attempts |
+| `GET /projects` | Registered projects and checkouts with Git columns, build info, inventory implementation scope |
 | `GET /health`   | JSON: `status`, `service`, `version`, `commit`, `modified`, `checked_at`, `uptime_seconds` |
 | `GET /api/projects` | JSON: `schema_version`, `generated_at`, `registry_file`, `collection`, `runtime_status`, and `projects[]` with `checkouts[]`, each carrying a `git` observation |
 

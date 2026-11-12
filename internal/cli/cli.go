@@ -106,6 +106,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "loopback IP address to bind (127.0.0.1 or ::1)")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "TCP port to bind (0 picks a free port)")
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "time allowed for in-flight requests on shutdown")
+	fs.StringVar(&cfg.StateDir, "state-dir", "", "absolute DevAtlas runner state directory (default: XDG_STATE_HOME/devatlas or ~/.local/state/devatlas)")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	configFlag := addConfigFlag(fs)
 	fs.Usage = func() {

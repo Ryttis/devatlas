@@ -65,7 +65,7 @@ func TestProjectsAPIAndHomeReflectRegistrationsWithoutRestart(t *testing.T) {
 	if !strings.Contains(resp.RuntimeStatus.Reason, "not collected") {
 		t.Errorf("runtime status reason must say it was not collected: %q", resp.RuntimeStatus.Reason)
 	}
-	_, html, _ := getBody(t, base+"/")
+	_, html, _ := getBody(t, base+"/projects")
 	if !strings.Contains(html, "No projects registered yet") {
 		t.Errorf("home page should say no projects are registered")
 	}
@@ -103,7 +103,7 @@ func TestProjectsAPIAndHomeReflectRegistrationsWithoutRestart(t *testing.T) {
 	}
 
 	// HTML must escape the name and show the checkout without a restart.
-	code, html, _ = getBody(t, base+"/")
+	code, html, _ = getBody(t, base+"/projects")
 	if code != http.StatusOK {
 		t.Fatalf("home status %d", code)
 	}
@@ -144,7 +144,7 @@ func TestMalformedRegistryIsReportedNotOverwritten(t *testing.T) {
 	if code != http.StatusInternalServerError || !strings.Contains(body, "cannot load registrations") {
 		t.Fatalf("status %d body %s", code, body)
 	}
-	code, html, _ := getBody(t, base+"/")
+	code, html, _ := getBody(t, base+"/projects")
 	if code != http.StatusInternalServerError || !strings.Contains(html, "could not be loaded and was left untouched") {
 		t.Fatalf("home status %d, body:\n%s", code, html)
 	}
@@ -178,7 +178,7 @@ func TestRegistryFailureAfterSuccessIsSafeAndRecovers(t *testing.T) {
 	handler := srv.routes()
 	const secret = "SENSITIVE_TEST_TOKEN"
 	for _, bad := range []string{"schema_version: " + secret + "\n", "schema_version: 1\nprojects: [{id: '" + secret + "', name: P}]\n"} {
-		for _, path := range []string{"/api/projects", "/"} {
+		for _, path := range []string{"/api/projects", "/projects"} {
 			for _, broken := range []bool{false, true, false} {
 				data := good
 				want := http.StatusOK
@@ -263,7 +263,7 @@ func TestDirectoryObservationPreservesRegistrations(t *testing.T) {
 			t.Fatalf("incorrect existence: %+v", c)
 		}
 		html := httptest.NewRecorder()
-		handler.ServeHTTP(html, httptest.NewRequest(http.MethodGet, "/", nil))
+		handler.ServeHTTP(html, httptest.NewRequest(http.MethodGet, "/projects", nil))
 		if html.Code != 200 || !strings.Contains(html.Body.String(), "<td>"+state+"</td>") {
 			t.Fatalf("HTML disagrees: %s", html.Body.String())
 		}
