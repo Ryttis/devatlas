@@ -12,5 +12,19 @@
     "reasoning_effort": "high",
     "timeout_seconds": 1200,
     "instructions": "Review the exact base-to-head diff against the task. Prioritize correctness, security, regressions, and missing tests. Report actionable findings with evidence. Use pass only when there are no actionable findings. Do not edit files."
+  },
+  "architect": {
+    "backend": "codex",
+    "model": "gpt-6-astra",
+    "reasoning_effort": "high",
+    "timeout_seconds": 600,
+    "instructions": "Read repository guidance. Plan only. Break the task into one or two independently reviewable slices. Each needs a positive observable DevAtlas CLI acceptance scenario. Use only version, help, or list as the first argument. The only optional flags allowed are -json and -no-git for list. Never write code."
+  },
+  "tester": {
+    "backend": "codex",
+    "model": "gpt-6-astra",
+    "reasoning_effort": "high",
+    "timeout_seconds": 600,
+    "instructions": "Evaluate the observed functional checks against the approved slice criteria. Report PASS only when the evidence demonstrates the intended behavior; FAIL for a behavioral defect; BLOCKED for missing evidence or an unavailable environment. Do not edit files or run extra commands."
   }
 }

@@ -97,3 +97,41 @@ the Go tools; they do not consume model usage:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -v
 ```
+
+## Four-role pilot
+
+On the runner host, from a trusted DevAtlas checkout:
+
+```sh
+python3 scripts/agent-workflow.py plan /absolute/path/task.md BASE_COMMIT_SHA
+# Read the printed workflow directory's plan.json before approving.
+python3 scripts/agent-workflow.py run /absolute/path/to/task-ID --approve PLAN_SHA256
+```
+
+The Architect uses a fresh read-only Codex run. The plan snapshots the request,
+base, branch, roles and one or two slices with observable CLI checks. The
+approval command binds execution to the SHA-256 printed for that exact plan.
+Running it under the server account records approval; do not copy the command
+into unattended scripts before reviewing the plan. Planning alone cannot code.
+
+The workflow uses a private clone with one local task branch and no remote.
+Fable implements each slice, the runner performs Go gates and commits, and a
+fresh Astra session reviews the exact commit with the check log available.
+After review passes, the runner runs the approved functional checks against
+the built CLI in a temporary registry environment. The Tester uses a separate
+read-only Codex session to evaluate that evidence. Both checks and Tester must
+pass on the reviewed SHA. A fresh Architect session then receives both verdicts
+and records its acknowledgment before the next slice starts. A failure or interruption
+stops the pilot for inspection; it does not retry or resume automatically.
+
+The pilot only accepts `version`, `help`, and `list` scenarios with exit
+status zero and a required output substring. Choose assertions that demonstrate
+the requested behavior. Use only trusted code and tasks: checks execute the
+compiled program under the server account. This is not a general test runner
+for arbitrary projects, shell commands or production environments.
+
+Inspect `workflow.json` for overall progress and both verdicts. Individual
+slice runs remain in `agent-runs`, with `functional-checks.json` and
+`tester.json` alongside the review. The existing MCP connector reports the
+code-review verdict from `state.json`; that verdict alone does not mean the
+workflow passed. No automatic push, merge or deployment is provided.

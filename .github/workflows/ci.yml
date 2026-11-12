@@ -45,6 +45,9 @@ jobs:
       - name: Race test
         run: go test -race ./...
 
+      - name: Verify agent pilot offline
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -v
+
       - name: Verify MCP connector
         working-directory: connector
         run: |

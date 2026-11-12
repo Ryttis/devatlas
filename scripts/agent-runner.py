@@ -76,7 +76,7 @@ def save_json(path, data):
     tmp.replace(path)
 
 
-def run(task, revision, runs):
+def run(task, revision, runs, *, working_checkout=None, job_dir=None, role_snapshot=None):
     if not re.fullmatch(r"[0-9a-fA-F]{7,40}", revision):
         raise ValueError("BASE must be a Git commit SHA (at least seven hex characters)")
     if not task.is_file() or task.stat().st_size > 32768:
@@ -85,14 +85,14 @@ def run(task, revision, runs):
     if not description:
         raise ValueError("TASK is empty")
     env = child_env()
-    base = git(ROOT, env, "rev-parse", "--verify", f"{revision}^{{commit}}")
-    roles = json.loads((ROOT / "scripts/agent-roles.json").read_text(encoding="utf-8"))
+    base = git(working_checkout or ROOT, env, "rev-parse", "--verify", f"{revision}^{{commit}}")
+    roles = role_snapshot if role_snapshot is not None else json.loads((ROOT / "scripts/agent-roles.json").read_text(encoding="utf-8"))
     coder, reviewer = roles["coder"], roles["reviewer"]
     if (coder["backend"], reviewer["backend"]) != ("claude-code", "codex"):
         raise ValueError("Unsupported coder/reviewer backends")
 
-    job = Path(tempfile.mkdtemp(prefix="run-", dir=runs))
-    checkout = job / "checkout"
+    job = job_dir if job_dir is not None else Path(tempfile.mkdtemp(prefix="run-", dir=runs))
+    checkout = working_checkout or job / "checkout"
     state = {"run_id": job.name, "base": base, "head": None}
 
     def mark(stage, **details):
@@ -104,10 +104,14 @@ def run(task, revision, runs):
         mark("preparing")
         (job / "task.md").write_text(description + "\n", encoding="utf-8")
         save_json(job / "roles.json", roles)
-        git(ROOT, env, "clone", "--local", "--no-hardlinks", "--no-checkout", "--",
-            str(ROOT), str(checkout))
-        git(checkout, env, "remote", "remove", "origin")
-        git(checkout, env, "switch", "--detach", base)
+        if working_checkout is None:
+            git(ROOT, env, "clone", "--local", "--no-hardlinks", "--no-checkout", "--",
+                str(ROOT), str(checkout))
+            git(checkout, env, "remote", "remove", "origin")
+            git(checkout, env, "switch", "--detach", base)
+        elif (git(checkout, env, "rev-parse", "HEAD") != base
+              or git(checkout, env, "status", "--porcelain")):
+            raise RuntimeError("Expected a clean workflow checkout at the approved base")
         claude_status, _ = command(["claude", "auth", "status"], checkout, env)
         codex_status = command(["codex", "login", "status"], checkout, env)
         auth = json.loads(claude_status)
@@ -171,7 +175,7 @@ def run(task, revision, runs):
                      "-c", f'model_reasoning_effort={json.dumps(reviewer["reasoning_effort"])}',
                      "--output-schema", str(schema), "--output-last-message", str(review),
                      f"{reviewer['instructions']}\nReview only {base}..{head}. "
-                     f"Formatting, build, vet, tests and race tests passed.\n\nTask:\n{description}"],
+                     f"Formatting, build, vet, tests and race tests passed. Check log: {job / 'checks.log'}.\n\nTask:\n{description}"],
                     checkout, env, reviewer["timeout_seconds"], log, sp.STDOUT)
         report = json.loads(review.read_text(encoding="utf-8"))
         if (not isinstance(report, dict) or set(report) != set(REVIEW_SCHEMA["required"]) or
