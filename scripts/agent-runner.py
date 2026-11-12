@@ -42,6 +42,12 @@ def child_env():
     return env
 
 
+class CommandFailed(RuntimeError):
+    def __init__(self, program, returncode):
+        super().__init__(f"{program} exited with status {returncode}")
+        self.returncode = returncode
+
+
 def command(args, cwd, env, timeout=120, stdout=sp.PIPE, stderr=sp.PIPE):
     with sp.Popen(args, cwd=cwd, env=env, stdin=sp.DEVNULL, stdout=stdout,
                   stderr=stderr, start_new_session=True, text=True) as proc:
@@ -61,7 +67,7 @@ def command(args, cwd, env, timeout=120, stdout=sp.PIPE, stderr=sp.PIPE):
             proc.wait()
             raise
         if proc.returncode:
-            raise RuntimeError(f"{args[0]} exited with status {proc.returncode}")
+            raise CommandFailed(args[0], proc.returncode)
         return out or "", err or ""
 
 

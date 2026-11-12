@@ -31,6 +31,8 @@ elif name == 'go' and args[:1] == ['test'] and mode == 'test_failure':
 elif name == 'go' and args[:1] == ['build']:
     binary = pathlib.Path(args[args.index('-o') + 1])
     binary.write_text('#!/bin/sh\nprintf "fixture ready\\n"\n')
+    if mode == "functional_exit_failure":
+        binary.write_text(binary.read_text() + "exit 7\n")
     binary.chmod(0o700)
 elif name == 'codex':
     if args == ['login', 'status']:
@@ -55,6 +57,11 @@ elif name == 'codex':
         if output.name == 'tester.json':
             evidence = json.loads(args[-1].split('Evidence:\n')[1])
             assert evidence['head'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+            assert evidence['base'] == subprocess.check_output(['git', 'rev-parse', 'HEAD^'], text=True).strip()
+            assert evidence['changed_files'] == ['answer.txt'] and evidence['review'] == 'pass'
+            assert '+updated' in evidence['diff_excerpt'] and not evidence['diff_truncated']
+            assert all(check['exit_code'] == (7 if mode == 'functional_exit_failure' else 0)
+                       for check in evidence['checks'])
             output.write_text(json.dumps({
                 'verdict': 'FAIL' if mode == 'tester_failure' else 'PASS',
                 'summary': 'Fixture verdict.'}))
@@ -204,6 +211,16 @@ class AgentRunnerTest(unittest.TestCase):
         run = self.root / "state/devatlas/agent-runs" / status["run_id"]
         evidence = json.loads((run / "functional-checks.json").read_text())
         self.assertEqual(evidence["checks"][0]["verdict"], "FAIL")
+
+    def test_nonzero_exit_blocks_even_if_help_text_matches(self):
+        job, digest = self.workflow_plan("functional_exit_failure")
+        result = self.workflow_command("functional_exit_failure", "run", job, "--approve", digest)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        status = json.loads((job / "workflow.json").read_text())
+        self.assertEqual((status["status"], status["completed"]), ("BLOCKED", []))
+        run = self.root / "state/devatlas/agent-runs" / status["run_id"]
+        evidence = json.loads((run / "functional-checks.json").read_text())
+        self.assertEqual(evidence["checks"][0]["exit_code"], 7)
 
 
 if __name__ == "__main__":

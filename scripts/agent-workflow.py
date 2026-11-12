@@ -158,16 +158,20 @@ def functional_checks(checks, run_job, env):
         check_env = {**env, "XDG_CONFIG_HOME": scratch, "XDG_STATE_HOME": scratch,
                      "DEVATLAS_CONFIG": str(cwd / "registrations.yaml")}
         for check in checks:
+            exit_code = None
             try:
                 stdout, stderr = command([str(run_job / "devatlas"), *check["args"]],
                                          cwd, check_env, timeout=20)
+                exit_code = 0
                 verdict = "PASS" if check["stdout_contains"] in stdout else "FAIL"
                 evidence = stdout[:3000] + stderr[:1000]
-            except RuntimeError as exc:
+            except runner["CommandFailed"] as exc:
+                exit_code = exc.returncode
                 verdict, evidence = "FAIL", str(exc)
             except (OSError, subprocess.TimeoutExpired) as exc:
                 verdict, evidence = "BLOCKED", type(exc).__name__
-            results.append({"check": check, "verdict": verdict, "evidence": evidence})
+            results.append({"check": check, "exit_code": exit_code,
+                            "verdict": verdict, "evidence": evidence})
     return results
 
 
@@ -212,7 +216,18 @@ def execute(job, approval, runs, env):
                 raise RuntimeError("Candidate does not directly follow the previous accepted commit")
             state(job, "TESTING", **progress)
             results = functional_checks(item["checks"], run_job, env)
-            evidence = {"head": candidate, "checks": results}
+            changed, _ = command(
+                ["git", "diff", "--name-only", "-z", "--no-renames", head, candidate, "--"],
+                checkout, env,
+            )
+            diff, _ = command(
+                ["git", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--unified=0",
+                 head, candidate, "--"],
+                checkout, env,
+            )
+            evidence = {"base": head, "head": candidate, "changed_files": changed.split("\0")[:-1],
+                        "diff_excerpt": diff[:8000], "diff_truncated": len(diff) > 8000,
+                        "review": review["stage"], "checks": results}
             save(run_job / "functional-checks.json", evidence)
             tester = codex(snapshot["roles"]["tester"],
                            f"Assess slice {index}: {item['task']}\nEvidence:\n{json.dumps(evidence)}",
