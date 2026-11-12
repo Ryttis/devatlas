@@ -22,7 +22,7 @@ func lock(lockPath string, timeout time.Duration) (func(), error) {
 	}
 	info, err := f.Stat()
 	if err == nil {
-		err = regularFile(info)
+		err = regularFile(info, false)
 	}
 	if err == nil {
 		err = f.Chmod(0o600)
@@ -52,12 +52,19 @@ func lock(lockPath string, timeout time.Duration) (func(), error) {
 	}
 }
 
-func regularFile(info os.FileInfo) error {
+func regularFile(info os.FileInfo, allowUnlinked bool) error {
 	if !info.Mode().IsRegular() {
 		return errors.New("must be a regular file, not a symlink or special file")
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); !ok || stat.Nlink != 1 {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errors.New("cannot determine file link count")
+	}
+	if stat.Nlink > 1 {
 		return errors.New("hard-linked files are unsupported; use one configuration path")
+	}
+	if stat.Nlink == 0 && !allowUnlinked {
+		return errors.New("lock file is no longer linked")
 	}
 	return nil
 }

@@ -14,4 +14,4 @@ func lock(string, time.Duration) (func(), error) {
 	return nil, errUnsupportedPlatform
 }
 
-func regularFile(os.FileInfo) error { return errUnsupportedPlatform }
+func regularFile(os.FileInfo, bool) error { return errUnsupportedPlatform }

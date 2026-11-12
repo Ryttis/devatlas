@@ -92,7 +92,9 @@ func configPath(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := regularFile(info); err != nil {
+	// A concurrent atomic replacement can unlink the old inode after Lstat
+	// resolves the path. Only the pathname is retained, never that inode.
+	if err := regularFile(info, true); err != nil {
 		return "", fmt.Errorf("registration file %s: %w", path, err)
 	}
 	return path, nil
