@@ -1,0 +1,29 @@
+[Unit]
+Description=DevAtlas read-only web console
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=rytis
+WorkingDirectory=/home/rytis
+Environment=HOME=/home/rytis
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/etc/devatlas/web.env
+ExecStart=/opt/devatlas/current/devatlas serve -host 127.0.0.1 -port 18642 -config ${DEVATLAS_CONFIG} -state-dir ${DEVATLAS_STATE_DIR}
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
