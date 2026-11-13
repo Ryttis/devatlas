@@ -141,28 +141,58 @@ scripts/deploy-web.sh rollback
 ```
 
 With a `previous` release it switches `current` back and restarts the unit; if
-that release is not healthy it returns to the one that was serving. Without a
-`previous` release (first migration) it disables and stops the unit and
-relaunches the recorded legacy process from the saved, SHA256-verified binary.
-Both paths tolerate `systemctl` errors, wait for `/health` to report the
-expected commit and say plainly when they fail. Releases, the registry, runner
-state and the legacy record are never deleted.
+that release is not healthy it returns to the one that was serving.
 
-Manual equivalent for the first migration, if the script is unavailable:
+Without a `previous` release (first migration), `deploy-legacy.py` validates
+all recovery inputs **before stopping or disabling the working unit**: the
+saved executable and its SHA256, NUL-delimited argv and selected environment,
+original working directory, commit and process start-time record. Missing,
+corrupt or unusable inputs leave the service and `current` untouched. Keep
+`deploy-legacy.py` alongside `deploy-web.sh` when obtaining these scripts.
+
+After preflight, rollback stops the unit and launches only the saved binary
+with the original argv (including argv[0]), cwd and selected environment.
+It requires the expected health response and the launched child's PID,
+start time and binary hash. Boot startup is disabled only after success.
+If legacy startup fails, the script attempts to stop only its own launched
+child through pidfd, restores the current release symlink and restarts that
+release. It confirms health and ownership of the listener by the unit's main
+PID before reporting that the release is serving again. The rollback command
+still returns non-zero because the requested legacy rollback failed.
+
+An occupied port is never accepted as a successful recovery merely because a
+recorded start time matches. This deliberately reports failure even if the
+old process might still be healthy: after SIGTERM timeout it may be shutting
+down or hung. The script will not kill an unknown listener to recover a port.
+If the current release also cannot be confirmed healthy, it reports
+`ROLLBACK FAILED` and requires operator diagnosis. No `previous`/current
+release, registry, runner state or legacy record is deleted by rollback.
+
+Do not stop the unit manually before checking recovery inputs. If the script
+is unavailable, retrieve both scripts from the reviewed GitHub revision and
+use the same checked rollback procedure; a blind `disable --now` followed by
+an unchecked legacy invocation bypasses the availability safeguards.
+
+### Automated regression tests
 
 ```sh
-sudo systemctl disable --now devatlas-web.service
-L=~/devatlas-web/rollback/legacy
-(cd "$L" && sha256sum -c SHA256) &&
-(cd "$(cat "$L/cwd")" && setsid python3 -c '
-import os, sys
-rec = sys.argv[1]
-items = lambda name: open(os.path.join(rec, name), "rb").read().split(b"\0")[:-1]
-os.execve(os.path.join(rec, "devatlas").encode(), items("cmdline"),
-          dict(i.split(b"=", 1) for i in items("environ")))
-' "$L" >>"$L/server.log" 2>&1 </dev/null &)
-curl -fsS --retry 5 --retry-connrefused http://127.0.0.1:18642/health
+bash -n scripts/deploy-web.sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_deploy_web.py -v
 ```
+
+CI runs these tests through its `scripts` test discovery. Tests invoke
+`cmd_rollback` for invalid-record rejection before any stop/disable, legacy
+startup failure returning to the current release, fallback failure and the
+successful disable order. They also cover an occupied port with matching
+start time and the cutover EXIT trap after restart/readiness errors.
+Service operations are fakes; unexpected sudo/systemctl/HTTP/ss calls fail
+the rehearsal. Registry and history fixtures must remain unchanged.
+
+A small, owned C fixture additionally verifies real saved-binary execution
+with the recorded argv, cwd and selected environment, without listening on a
+network port or invoking systemd. Tests clean up only that fixture process.
+They require unprivileged Linux and a C compiler; unsupported checks are
+reported as skipped, not as target-server validation.
 
 ## Unit privileges
 
@@ -181,5 +211,6 @@ Registrations are changed with the CLI (`devatlas add|remove`), outside the unit
   is subject to its rate limit; a failed lookup blocks the build.
 - The legacy process restored by rollback is again an unmanaged process and
   does not survive a reboot. It runs from the saved copy of the binary.
-- Failure handling was exercised with a stand-in for `systemctl` on a temporary
-  port, not under the system service manager.
+- Automated failure handling uses a stand-in for `systemctl`, not the real
+  system service manager. Target-host lifecycle, authenticated routes and
+  real-service rollback remain separate acceptance checks.

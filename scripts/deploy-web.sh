@@ -325,42 +325,26 @@ PY
 	mv "$new" "$LEGACY"
 }
 
-start_legacy() { # relaunch the recorded process from the saved, verified binary
-	local cwd pid
-	[ -f "$LEGACY/cmdline" ] && [ -f "$LEGACY/SHA256" ] && [ -f "$LEGACY/environ" ] || {
-		say "no complete legacy record in $LEGACY"
-		return 1
-	}
-	(cd "$LEGACY" && sha256sum --status -c SHA256) || {
-		say "the saved legacy binary does not match its recorded SHA256; refusing to run it"
-		return 1
-	}
-	cwd=$(cat "$LEGACY/cwd")
-	if [ ! -d "$cwd" ]; then
-		say "original working directory $cwd no longer exists; refusing rollback with a different cwd"
-		return 1
+validate_legacy() { # read-only: must succeed before stopping a working release
+	python3 "$HERE/deploy-legacy.py" validate "$LEGACY" "$PORT"
+}
+
+start_legacy() { # launch only the saved binary; keep identity for failed-start cleanup
+	local identity pid child_start
+	validate_legacy || return 1
+	identity=$(python3 "$HERE/deploy-legacy.py" launch "$LEGACY" "$PORT") || return 1
+	read -r pid child_start <<<"$identity"
+	if wait_ready "$PORT" "$(cat "$LEGACY/commit")" 15 &&
+		[ "$(listener_pid "$PORT")" = "$pid" ] &&
+		[ "$(proc_starttime "$pid")" = "$child_start" ] &&
+		[ "$(exe_sha256 "$pid")" = "$(recorded_sha256)" ]; then
+		say "restored legacy process pid $pid (commit $(cat "$LEGACY/commit"), sha256 $(recorded_sha256)) on $PORT"
+		return 0
 	fi
-	# New session; execve with exactly the recorded argv (including argv[0]) and
-	# environment, so nothing from this shell leaks into the restored process.
-	(cd "$cwd" && exec setsid python3 -c '
-import os, sys
-rec = sys.argv[1]
-def items(name):
-    with open(os.path.join(rec, name), "rb") as f:
-        return f.read().split(b"\0")[:-1]
-env = dict(item.split(b"=", 1) for item in items("environ"))
-os.execve(os.path.join(rec, "devatlas").encode(), items("cmdline"), env)
-' "$LEGACY" >>"$LEGACY/server.log" 2>&1 </dev/null &)
-	wait_ready "$PORT" "$(cat "$LEGACY/commit")" 15 || {
-		say "the legacy process did not become healthy; inspect $LEGACY/server.log"
-		return 1
-	}
-	pid=$(listener_pid "$PORT")
-	[ -n "$pid" ] && [ "$(exe_sha256 "$pid")" = "$(recorded_sha256)" ] || {
-		say "port $PORT is not served by the saved legacy binary"
-		return 1
-	}
-	say "restored legacy process pid $pid (commit $(cat "$LEGACY/commit"), sha256 $(recorded_sha256)) on $PORT"
+	say "the launched legacy child did not become healthy; attempting to stop only that child"
+	pidfd_term "$pid" "$child_start" "$(recorded_sha256)" 20 ||
+		say "WARN  could not confirm legacy child exit; no other process will be signalled"
+	return 1
 }
 
 restore_prior() { # best effort, never aborts half way; 0 only if the prior service answers
@@ -378,11 +362,7 @@ restore_prior() { # best effort, never aborts half way; 0 only if the prior serv
 		rm -f "$ROOT/current"
 		if ! wait_port_free 20; then
 			pid=$(listener_pid "$PORT")
-			if [ -n "$pid" ] && [ "$(proc_starttime "$pid")" = "$(cat "$LEGACY/starttime")" ]; then
-				say "the original process pid $pid still holds port $PORT; nothing to restore"
-				return 0
-			fi
-			say "port $PORT is still held by pid ${pid:-unknown}; cannot start the legacy process"
+			say "port $PORT is still held by pid ${pid:-unknown}; restoration is NOT verified, even if the original process is alive"
 			return 1
 		fi
 		start_legacy || return 1
@@ -405,7 +385,7 @@ on_exit() {
 		if restore_prior; then
 			say "ROLLED BACK: the prior service is restored; see: journalctl -u $UNIT"
 		else
-			say "ROLLBACK FAILED: nothing healthy on $PORT; act by hand (docs/DEPLOYMENT.md, Rollback)"
+			say "ROLLBACK FAILED: recovery on $PORT is not verified; act by hand (docs/DEPLOYMENT.md, Rollback)"
 		fi
 		rc=1
 	fi
@@ -437,14 +417,28 @@ cmd_rollback() {
 	if [ -n "$pid" ] && [ "$pid" != "$(unit_pid)" ]; then
 		die "port $PORT is served by pid $pid outside $UNIT and there is no previous release; nothing to roll back"
 	fi
-	[ -f "$LEGACY/cmdline" ] || die "no previous release and no recorded legacy process"
+	# Validate every recovery input before disable/stop or changing current.
+	validate_legacy || die "invalid legacy recovery record; running service left untouched"
+	[ -n "$cur" ] && release_ok "$(basename "$cur")" &&
+		[ "$cur" = "$ROOT/releases/$(basename "$cur")" ] ||
+		die "no verified current release to resume if legacy startup fails"
 	say "rolling back to the recorded pre-unit process"
-	$SUDO "$SYSTEMCTL" disable "$UNIT" || say "WARN  systemctl disable $UNIT returned an error"
 	RESTORE=legacy
-	if restore_prior; then RESTORE=""; else
+	if restore_prior; then
 		RESTORE=""
-		die "ROLLBACK FAILED: nothing healthy on $PORT; inspect $LEGACY/server.log"
+		# Preserve boot enablement until a successful legacy restoration.
+		$SUDO "$SYSTEMCTL" disable "$UNIT" || say "WARN  systemctl disable $UNIT returned an error"
+		return 0
 	fi
+	RESTORE=""
+	say "legacy restoration failed; returning to the release that served before rollback"
+	switch_current "$cur" || die "ROLLBACK FAILED: cannot restore current release link"
+	$SUDO "$SYSTEMCTL" restart "$UNIT" || say "WARN  systemctl restart $UNIT returned an error"
+	if wait_ready "$PORT" "$(basename "$cur" | cut -c1-12)" 20 &&
+		[ -n "$(unit_pid)" ] && [ "$(listener_pid "$PORT")" = "$(unit_pid)" ]; then
+		die "legacy rollback failed; release $(basename "$cur") is serving again"
+	fi
+	die "ROLLBACK FAILED: current release could not be confirmed healthy; inspect: journalctl -u $UNIT"
 }
 
 cmd_cutover() {
@@ -479,6 +473,7 @@ cmd_cutover() {
 		[ "$legacy_registry" = "$REGISTRY" ] ||
 			die "the running process uses registry '${legacy_registry:-<default>}' but the unit would use '$REGISTRY'; set DEVATLAS_REGISTRY"
 		record_legacy "$pid"
+		validate_legacy || die "legacy recovery record is invalid; original process left running"
 		say "stopping legacy pid $pid ($(tr '\0' ' ' <"$LEGACY/cmdline")), sha256 $(recorded_sha256)"
 		RESTORE=legacy
 		rc=0
