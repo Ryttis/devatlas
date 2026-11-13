@@ -131,6 +131,31 @@ func TestConsoleReportContractsAndURIRedaction(t *testing.T) {
 	}
 	absent(body, "demo-pass", "alice", "example.invalid", unavailable)
 
+	// Apostrophes are valid userinfo, including inside single-quoted prose.
+	// Check reviewer summary, findings and tester summary through HTML rendering.
+	for _, scheme := range []string{"ssh", "git+ssh", "mongodb+srv"} {
+		for _, password := range []string{"prefix'TAIL_SENTINEL", "prefix%27TAIL_SENTINEL", "prefix!$&'()*+,;=:TAIL_SENTINEL"} {
+			uri := scheme + "://alice:" + password + "@example.invalid/repo"
+			review, err := json.Marshal(map[string]any{"verdict": "changes_requested", "summary": "REVIEW_SUMMARY '" + uri + "' after", "findings": []string{"REVIEW_FINDING " + uri + " docs/a.md:3"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tester, err := json.Marshal(map[string]any{"verdict": "FAIL", "summary": "TESTER_SUMMARY " + uri + " after"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			write("run-quotes", "review.json", string(review))
+			write("run-quotes", "tester.json", string(tester))
+			body = page("run-quotes", "changes_requested")
+			absent(body, "alice", "prefix", "TAIL_SENTINEL", "example.invalid", unavailable)
+			for _, want := range []string{"REVIEW_SUMMARY", "REVIEW_FINDING", "TESTER_SUMMARY", "docs/a.md:3", "[paslėpta]"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("%s: missing %q", scheme, want)
+				}
+			}
+		}
+	}
+
 	// A tester document carrying reviewer-only findings is rejected, not rendered.
 	write("run-tester", "review.json", `{"verdict":"pass","summary":"REVIEW_SUMMARY","findings":[]}`)
 	write("run-tester", "tester.json", `{"verdict":"PASS","summary":"TESTER_SUMMARY","findings":["RAW_FIELD_SENTINEL"]}`)
