@@ -63,6 +63,9 @@ detail routes. Do not expose this UI as a public report viewer.
 
 ## Existing server rollout
 
+The reviewed Git-based procedure, the `devatlas-web.service` unit and rollback
+are in [DEPLOYMENT.md](DEPLOYMENT.md); the notes below describe the same instance.
+
 Build and test in the source checkout after applying the patch:
 
 ```sh

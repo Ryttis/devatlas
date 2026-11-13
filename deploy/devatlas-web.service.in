@@ -1,0 +1,48 @@
+# Template for /etc/systemd/system/devatlas-web.service.
+# Render with: scripts/deploy-web.sh unit
+# The @...@ placeholders are replaced by the operator's account and paths.
+[Unit]
+Description=DevAtlas web UI and agent console (loopback only)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@DEPLOY_ROOT@
+Environment=HOME=@HOME@
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=@DEPLOY_ROOT@/current/devatlas serve -host 127.0.0.1 -port @PORT@ -config @REGISTRY@ -state-dir @STATE_DIR@
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+
+# The web process only reads: the registry file, runner state and Git
+# metadata of registered checkouts. Nothing below grants a writable path.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+IPAddressDeny=any
+IPAddressAllow=localhost
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
