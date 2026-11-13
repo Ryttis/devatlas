@@ -3,9 +3,11 @@
 ## Scope and source of truth
 
 DevAtlas is a local Go service for Windows 11 + WSL2/Linux. The current
-implementation is slice 03: CLI registration, YAML persistence, loopback HTTP
-UI/API, and read-only Git observations. Docker, port and HTTP collectors,
-SQLite history, context export, and MCP are planned, not implemented.
+implementation includes slice 03 (CLI registration, YAML persistence, loopback
+HTTP UI/API and read-only Git observations), local agent runner/workflow scripts,
+a separate read-only MCP connector, and the execution console described in
+docs/AGENT_CONSOLE.md. Docker, port and HTTP collectors, SQLite history and
+context export remain planned.
 Preserve the read-only collector boundaries, secret exclusion, bounded
 execution, and explicit unknown/error states described in the architecture.
 

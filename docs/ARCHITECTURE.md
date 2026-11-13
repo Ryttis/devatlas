@@ -29,7 +29,7 @@ internal/collect/git         first collector adapter: runs the local git command
                              isolation, and a sanitised remote model; returns an
                              Observation per path with status, source, and time
 internal/httpserver          loopback listener, timeouts, graceful shutdown,
-                             GET /health, GET /api/projects, GET / (html/template);
+                             GET /health, GET /api/projects, GET /projects (html/template);
                              ObserveProjects joins registrations with observations
 internal/version             version string, VCS commit from Go build info
 ```
@@ -67,7 +67,7 @@ module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The
 - **Listen and Serve are separate steps.** `Listen` opens the socket and
   returns the real address (useful with port 0 and in tests); `Serve` runs
   until cancelled. This keeps the server testable without signals.
-- **Honest UI.** The home page renders `httpserver.CurrentScope`, a list of
+- **Honest UI.** The project inventory page renders `httpserver.CurrentScope`, a list of
   implemented and deferred capabilities, so the UI never implies features
   that do not exist. Update it in every slice.
 - **Facts carry time.** `/health` already includes `checked_at`; every future
@@ -184,3 +184,11 @@ exclusion is asserted on the JSON, the HTML, and the log. Later slices add
 tests for port-conflict logic and status and staleness modelling, using
 controlled fixtures for Docker, plus at least one flow verified against a
 real local project.
+
+## Execution console
+
+The read-only execution console at `/` and `/runs` projects bounded runner
+and workflow state files through `internal/runhistory`. It does not invoke
+collectors or agents. Detail pages expose validated reviewer/tester prose and
+workflow links; the Git inventory remains at `/projects`. See
+[AGENT_CONSOLE.md](AGENT_CONSOLE.md) for evidence semantics and file boundaries.

@@ -172,7 +172,7 @@ func TestHomePage(t *testing.T) {
 		}
 	}()
 
-	resp, err := http.Get(base + "/")
+	resp, err := http.Get(base + "/projects")
 	if err != nil {
 		t.Fatalf("GET /: %v", err)
 	}
