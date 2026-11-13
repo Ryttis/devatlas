@@ -3,6 +3,7 @@
 package runhistory
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -307,44 +308,92 @@ func (s Store) Get(id string) (Detail, error) {
 	}
 	d := Detail{Entry: e}
 	if e.Kind == "run" {
-		d.Reports = append(d.Reports, readReport(job, "review.json", "Reviewerio išvada", e.Review))
-		d.Reports = append(d.Reports, readReport(job, "tester.json", "Testerio išvada", ""))
+		d.Reports = append(d.Reports, readReview(job, e.Review), readTester(job))
 	}
 	return d, nil
 }
 
-func readReport(dir *os.File, file, name, expected string) Report {
-	r := Report{Name: name, Verdict: "not_available"}
+// loadReport reads one bounded report file and decodes it strictly into dst.
+// ok is false while the report is legitimately absent; unavailable marks a
+// promised, unreadable or malformed report. Unknown fields, non-object
+// documents and trailing data are rejected, mirroring the producer contracts.
+func loadReport(dir *os.File, file string, promised bool, dst any) (ok, unavailable bool) {
+	b, err := readJSON(dir, file, 64<<10)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, promised
+	}
+	if err != nil {
+		return false, true
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if dec.Decode(dst) != nil {
+		return false, true
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return false, true
+	}
+	return true, false
+}
+
+// readReview projects review.json: exactly verdict, summary and findings.
+// The verdict must equal the terminal run stage, and findings must be
+// non-blank strings present exactly when changes are requested.
+func readReview(dir *os.File, expected string) Report {
+	r := Report{Name: "Reviewerio išvada", Verdict: "not_available"}
 	if expected == "not_available" {
 		return r
 	}
-	b, err := readJSON(dir, file, 64<<10)
-	if errors.Is(err, os.ErrNotExist) {
-		// A terminal review state promises a report; absence is inconsistent.
-		r.Unavailable = expected != ""
-		return r
-	}
-	if err != nil {
-		r.Unavailable = true
-		return r
-	}
 	var data struct {
-		Verdict  string   `json:"verdict"`
-		Summary  string   `json:"summary"`
-		Findings []string `json:"findings"`
+		Verdict  *string    `json:"verdict"`
+		Summary  *string    `json:"summary"`
+		Findings *[]*string `json:"findings"`
 	}
-	if json.Unmarshal(b, &data) != nil || strings.TrimSpace(data.Summary) == "" || len(data.Findings) > 50 {
+	// A terminal review state promises a report; absence is inconsistent.
+	ok, unavailable := loadReport(dir, "review.json", true, &data)
+	if !ok {
+		r.Unavailable = unavailable
+		return r
+	}
+	r.Unavailable = true
+	if data.Verdict == nil || *data.Verdict != expected || allowed(expected, "pass", "changes_requested") != expected ||
+		data.Summary == nil || strings.TrimSpace(*data.Summary) == "" ||
+		data.Findings == nil || len(*data.Findings) > 50 ||
+		(len(*data.Findings) > 0) != (expected == "changes_requested") {
+		return r
+	}
+	findings := make([]string, 0, len(*data.Findings))
+	for _, finding := range *data.Findings {
+		if finding == nil || strings.TrimSpace(*finding) == "" {
+			return r
+		}
+		findings = append(findings, redact(*finding))
+	}
+	r.Unavailable, r.Verdict, r.Summary = false, *data.Verdict, redact(*data.Summary)
+	if len(findings) > 0 {
+		r.Findings = findings
+	}
+	return r
+}
+
+// readTester projects tester.json: exactly verdict and summary. Reviewer-only
+// fields such as findings make the document invalid and are never projected.
+func readTester(dir *os.File) Report {
+	r := Report{Name: "Testerio išvada", Verdict: "not_available"}
+	var data struct {
+		Verdict *string `json:"verdict"`
+		Summary *string `json:"summary"`
+	}
+	ok, unavailable := loadReport(dir, "tester.json", false, &data)
+	if !ok {
+		r.Unavailable = unavailable
+		return r
+	}
+	if data.Verdict == nil || allowed(*data.Verdict, "PASS", "FAIL", "BLOCKED") == "not_available" ||
+		data.Summary == nil || strings.TrimSpace(*data.Summary) == "" {
 		r.Unavailable = true
 		return r
 	}
-	if (file == "review.json" && (data.Verdict != expected || ((len(data.Findings) > 0) != (expected == "changes_requested")))) ||
-		(file == "tester.json" && allowed(data.Verdict, "PASS", "FAIL", "BLOCKED") == "not_available") {
-		r.Unavailable = true
-		return r
-	}
-	r.Verdict, r.Summary = data.Verdict, redact(data.Summary)
-	for _, finding := range data.Findings {
-		r.Findings = append(r.Findings, redact(finding))
-	}
+	r.Verdict, r.Summary = *data.Verdict, redact(*data.Summary)
 	return r
 }

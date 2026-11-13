@@ -34,7 +34,7 @@ func TestConsoleReadOnlyFlow(t *testing.T) {
 		os.MkdirAll(dir, 0700)
 		b, _ := json.Marshal(map[string]any{"run_id": id, "stage": "changes_requested", "base": strings.Repeat("a", 40), "head": strings.Repeat("b", 40), "updated_at": "2026-11-12T12:00:00Z", "error": "RAW_ERROR_SENTINEL"})
 		os.WriteFile(filepath.Join(dir, "state.json"), b, 0600)
-		b, _ = json.Marshal(map[string]any{"verdict": "changes_requested", "summary": "<script>alert(1)</script> password=SECRET_SENTINEL", "findings": []string{"[P2] docs/AGENT_SMOKE_TEST.md:30–32 — 32 lines, limit 30"}, "extra": "RAW_FIELD_SENTINEL"})
+		b, _ = json.Marshal(map[string]any{"verdict": "changes_requested", "summary": "<script>alert(1)</script> password=SECRET_SENTINEL", "findings": []string{"[P2] docs/AGENT_SMOKE_TEST.md:30–32 — 32 lines, limit 30"}})
 		os.WriteFile(filepath.Join(dir, "review.json"), b, 0600)
 	}
 	w := request("GET", "/runs")
@@ -78,5 +78,83 @@ func TestConsoleReadOnlyFlow(t *testing.T) {
 		if w := request("GET", path); w.Code != 400 {
 			t.Errorf("%s = %d", path, w.Code)
 		}
+	}
+}
+
+func TestConsoleReportContractsAndURIRedaction(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.StateDir = t.TempDir()
+	srv, err := New(cfg, testStore(t), testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := srv.routes()
+	const unavailable = "Ataskaita nepasiekiama"
+	write := func(id, file, doc string) {
+		t.Helper()
+		dir := filepath.Join(cfg.StateDir, "agent-runs", id)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(doc), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page := func(id, stage string) string {
+		t.Helper()
+		b, _ := json.Marshal(map[string]any{"run_id": id, "stage": stage, "base": strings.Repeat("a", 40), "head": strings.Repeat("b", 40), "updated_at": "2026-11-12T12:00:00Z"})
+		write(id, "state.json", string(b))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/runs/"+id, nil))
+		if w.Code != 200 {
+			t.Fatalf("%s = %d", id, w.Code)
+		}
+		return w.Body.String()
+	}
+	absent := func(body string, values ...string) {
+		t.Helper()
+		for _, bad := range values {
+			if strings.Contains(body, bad) {
+				t.Errorf("exposed %q", bad)
+			}
+		}
+	}
+
+	// Valid reviewer and tester reports render; URI credentials never do.
+	write("run-valid0", "review.json", `{"verdict":"changes_requested","summary":"Clone ssh://alice:demo-pass@example.invalid/repo fails","findings":["REVIEW_FINDING git+ssh://alice:demo-pass@example.invalid/repo.git","mongodb+srv://alice:demo-pass@example.invalid/db in docs/a.md:3","bare alice:demo-pass@example.invalid"]}`)
+	write("run-valid0", "tester.json", `{"verdict":"FAIL","summary":"TESTER_SUMMARY redis+tls://alice:demo-pass@example.invalid:6380/0"}`)
+	body := page("run-valid0", "changes_requested")
+	for _, want := range []string{"REVIEW_FINDING", "docs/a.md:3", "TESTER_SUMMARY", "FAIL", "[paslėpta]"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	absent(body, "demo-pass", "alice", "example.invalid", unavailable)
+
+	// A tester document carrying reviewer-only findings is rejected, not rendered.
+	write("run-tester", "review.json", `{"verdict":"pass","summary":"REVIEW_SUMMARY","findings":[]}`)
+	write("run-tester", "tester.json", `{"verdict":"PASS","summary":"TESTER_SUMMARY","findings":["RAW_FIELD_SENTINEL"]}`)
+	body = page("run-tester", "pass")
+	if !strings.Contains(body, "REVIEW_SUMMARY") || strings.Count(body, unavailable) != 1 {
+		t.Error("tester document with findings was not rejected on its own")
+	}
+	absent(body, "RAW_FIELD_SENTINEL", "TESTER_SUMMARY", "Pastabos")
+
+	// Reviewer documents outside the producer contract are rejected.
+	for i, doc := range []string{
+		`{"verdict":"changes_requested","summary":"RAW_FIELD_SENTINEL","findings":["RAW_FIELD_SENTINEL"],"extra":"x"}`,
+		`{"verdict":"changes_requested","summary":"RAW_FIELD_SENTINEL","findings":null}`,
+		`{"verdict":"changes_requested","summary":"RAW_FIELD_SENTINEL","findings":["RAW_FIELD_SENTINEL","  "]}`,
+		`{"verdict":"changes_requested","summary":"RAW_FIELD_SENTINEL","findings":["RAW_FIELD_SENTINEL",null]}`,
+		`{"verdict":"changes_requested","summary":"RAW_FIELD_SENTINEL","findings":"RAW_FIELD_SENTINEL"}`,
+		`null`,
+	} {
+		id := fmt.Sprintf("run-bad%03d", i)
+		write(id, "review.json", doc)
+		body = page(id, "changes_requested")
+		if !strings.Contains(body, unavailable) {
+			t.Errorf("case %d accepted", i)
+		}
+		absent(body, "RAW_FIELD_SENTINEL", "Pastabos")
 	}
 }

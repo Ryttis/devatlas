@@ -37,6 +37,15 @@ that family with a warning instead of presenting a misleading latest subset.
 Each JSON file is limited to 64 KiB; reports have at most 50 findings and each
 displayed prose field is limited to 4000 Unicode characters.
 
+Reviewer and tester reports are validated and projected separately, mirroring
+the producer contracts. `review.json` must be an object with exactly `verdict`,
+`summary` and `findings`; the verdict must equal the terminal run stage, and
+findings must be an array of non-blank strings that is non-empty exactly for
+`changes_requested`. `tester.json` must be an object with exactly `verdict`
+(`PASS`, `FAIL` or `BLOCKED`) and `summary`; tester findings are never shown.
+Unknown fields, wrong types, `null` values, blank prose and trailing data make
+that report unavailable with a generic message, without affecting the other.
+
 The operator-selected state path and its ancestors are trusted. On Linux/WSL,
 all relative components are opened through directory descriptors with no-follow;
 record files must be regular, singly linked files. Symlinks, hard links, FIFOs
@@ -45,7 +54,8 @@ The state writer is trusted: JSON is schema-checked, not cryptographically signe
 Separate state/report reads are not an atomic snapshot; an inconsistent review
 is suppressed and can be retried with Refresh after the writer finishes.
 
-HTML is escaped. Common credential formats, URLs and user home paths in report
+HTML is escaped. Common credential formats, URIs of any scheme (masked whole,
+including userinfo), `user:password@host` forms and user home paths in report
 prose are masked as defense in depth; this cannot detect every arbitrary secret.
 Console responses disable caching and apply a restrictive CSP. Keep the entire
 console behind owner authentication when proxying outside loopback, including

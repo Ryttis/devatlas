@@ -132,6 +132,26 @@ func TestRedaction(t *testing.T) {
 			t.Errorf("leaked %q", secret)
 		}
 	}
+	for _, uri := range []string{
+		"ssh://alice:demo-pass@example.invalid/repo",
+		"git+ssh://alice:demo-pass@example.invalid/repo.git",
+		"mongodb+srv://alice:demo-pass@example.invalid/db",
+		"mongodb://alice:demo-pass@example.invalid:27017/db?authSource=admin",
+		"SFTP://alice:demo-pass@example.invalid",
+		"x-custom.scheme-1://alice:demo-pass@example.invalid/x",
+		"alice:demo-pass@example.invalid",
+		"//alice:demo-pass@example.invalid/share",
+	} {
+		got := redact("see docs/check.go:42 (" + uri + ") then retry")
+		for _, secret := range []string{"alice", "demo-pass"} {
+			if strings.Contains(got, secret) {
+				t.Errorf("%s leaked %q: %s", uri, secret, got)
+			}
+		}
+		if !strings.Contains(got, "docs/check.go:42") || !strings.Contains(got, "then retry") {
+			t.Errorf("%s: surrounding prose lost: %s", uri, got)
+		}
+	}
 	if !strings.Contains(got, "docs/check.go:42") {
 		t.Fatal("relative finding lost")
 	}
@@ -157,5 +177,130 @@ func TestMissingAndBoundedHistory(t *testing.T) {
 	}
 	if l := s.List(context.Background()); len(l.Warnings) != 1 {
 		t.Fatal("missing overflow warning")
+	}
+}
+
+func putRaw(t *testing.T, root, id, file, doc string) {
+	t.Helper()
+	dir := filepath.Join(root, "agent-runs", id)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(doc), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewerAndTesterContractsAreSeparate(t *testing.T) {
+	root := t.TempDir()
+	s := Store{Dir: root}
+	id := "run-aaaaaa"
+	reports := func(stage, review, tester string) (Report, Report) {
+		t.Helper()
+		put(t, root, "agent-runs", id, "state.json", state(id, stage))
+		putRaw(t, root, id, "review.json", review)
+		putRaw(t, root, id, "tester.json", tester)
+		d, err := s.Get(id)
+		if err != nil || len(d.Reports) != 2 {
+			t.Fatalf("detail: %+v %v", d, err)
+		}
+		return d.Reports[0], d.Reports[1]
+	}
+	rejected := func(r Report) bool {
+		return r.Unavailable && r.Verdict == "not_available" && r.Summary == "" && r.Findings == nil
+	}
+	const (
+		reviewPass    = `{"verdict":"pass","summary":"Looks right","findings":[]}`
+		reviewChanges = `{"verdict":"changes_requested","summary":"One issue","findings":["[P2] a.go:1 — issue"]}`
+		testerPass    = `{"verdict":"PASS","summary":"Checks passed"}`
+	)
+
+	review, tester := reports("pass", reviewPass, testerPass)
+	if review.Unavailable || review.Verdict != "pass" || review.Summary != "Looks right" || review.Findings != nil {
+		t.Fatalf("valid pass review: %+v", review)
+	}
+	if tester.Unavailable || tester.Verdict != "PASS" || tester.Summary != "Checks passed" || tester.Findings != nil {
+		t.Fatalf("valid tester: %+v", tester)
+	}
+	review, _ = reports("changes_requested", reviewChanges, testerPass)
+	if review.Unavailable || review.Verdict != "changes_requested" || len(review.Findings) != 1 || review.Findings[0] != "[P2] a.go:1 — issue" {
+		t.Fatalf("valid changes review: %+v", review)
+	}
+	for _, verdict := range []string{"FAIL", "BLOCKED"} {
+		if _, tester = reports("pass", reviewPass, `{"verdict":"`+verdict+`","summary":"Recorded"}`); tester.Unavailable || tester.Verdict != verdict {
+			t.Fatalf("valid tester %s: %+v", verdict, tester)
+		}
+	}
+
+	for name, doc := range map[string]string{
+		"injected findings":    `{"verdict":"PASS","summary":"ok","findings":["RAW_FIELD_SENTINEL"]}`,
+		"empty findings":       `{"verdict":"PASS","summary":"ok","findings":[]}`,
+		"null findings":        `{"verdict":"PASS","summary":"ok","findings":null}`,
+		"unknown field":        `{"verdict":"PASS","summary":"ok","extra":"x"}`,
+		"reviewer verdict":     `{"verdict":"pass","summary":"ok"}`,
+		"numeric verdict":      `{"verdict":1,"summary":"ok"}`,
+		"null verdict":         `{"verdict":null,"summary":"ok"}`,
+		"missing verdict":      `{"summary":"ok"}`,
+		"null summary":         `{"verdict":"PASS","summary":null}`,
+		"blank summary":        `{"verdict":"PASS","summary":" \n\t"}`,
+		"missing summary":      `{"verdict":"PASS"}`,
+		"array summary":        `{"verdict":"PASS","summary":["ok"]}`,
+		"null document":        `null`,
+		"array document":       `[{"verdict":"PASS","summary":"ok"}]`,
+		"string document":      `"PASS"`,
+		"trailing document":    `{"verdict":"PASS","summary":"ok"}{"verdict":"FAIL","summary":"no"}`,
+		"trailing garbage":     `{"verdict":"PASS","summary":"ok"} x`,
+		"truncated document":   `{"verdict":"PASS","summary":"ok"`,
+		"empty file":           ``,
+		"empty object":         `{}`,
+		"bool verdict summary": `{"verdict":true,"summary":false}`,
+	} {
+		review, tester = reports("pass", reviewPass, doc)
+		if !rejected(tester) {
+			t.Errorf("tester %s accepted: %+v", name, tester)
+		}
+		// A bad tester document must not hide the independent, valid review.
+		if review.Unavailable || review.Verdict != "pass" {
+			t.Errorf("tester %s affected review: %+v", name, review)
+		}
+	}
+
+	many := `["x"` + strings.Repeat(`,"x"`, 50) + `]`
+	for name, c := range map[string]struct{ stage, doc string }{
+		"null findings":             {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":null}`},
+		"null findings on pass":     {"pass", `{"verdict":"pass","summary":"s","findings":null}`},
+		"missing findings":          {"pass", `{"verdict":"pass","summary":"s"}`},
+		"empty finding":             {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":[""]}`},
+		"blank finding":             {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":["real"," \n\t "]}`},
+		"null finding":              {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":["real",null]}`},
+		"numeric finding":           {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":[1]}`},
+		"object finding":            {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":[{"text":"x"}]}`},
+		"nested finding":            {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":[["x"]]}`},
+		"string findings":           {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":"x"}`},
+		"object findings":           {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":{"0":"x"}}`},
+		"too many findings":         {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":` + many + `}`},
+		"changes without findings":  {"changes_requested", `{"verdict":"changes_requested","summary":"s","findings":[]}`},
+		"pass with findings":        {"pass", `{"verdict":"pass","summary":"s","findings":["x"]}`},
+		"verdict differs (pass)":    {"pass", reviewChanges},
+		"verdict differs (changes)": {"changes_requested", reviewPass},
+		"tester verdict":            {"pass", `{"verdict":"PASS","summary":"s","findings":[]}`},
+		"null verdict":              {"pass", `{"verdict":null,"summary":"s","findings":[]}`},
+		"numeric verdict":           {"pass", `{"verdict":1,"summary":"s","findings":[]}`},
+		"null summary":              {"pass", `{"verdict":"pass","summary":null,"findings":[]}`},
+		"blank summary":             {"pass", `{"verdict":"pass","summary":"  ","findings":[]}`},
+		"numeric summary":           {"pass", `{"verdict":"pass","summary":7,"findings":[]}`},
+		"unknown field":             {"pass", `{"verdict":"pass","summary":"s","findings":[],"extra":"x"}`},
+		"null document":             {"pass", `null`},
+		"array document":            {"pass", `[]`},
+		"trailing document":         {"pass", reviewPass + reviewPass},
+		"empty file":                {"pass", ``},
+	} {
+		review, tester = reports(c.stage, c.doc, testerPass)
+		if !rejected(review) {
+			t.Errorf("review %s accepted: %+v", name, review)
+		}
+		if tester.Unavailable || tester.Verdict != "PASS" {
+			t.Errorf("review %s affected tester: %+v", name, tester)
+		}
 	}
 }
