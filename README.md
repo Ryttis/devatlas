@@ -5,13 +5,15 @@ locally developed projects, their actual runtime status, and project context
 for the developer and AI coding agents. It targets Windows 11 + WSL2 and runs
 as one Go process inside WSL.
 
-**Current state: slice 03, read-only Git checkout observations.** This build
-provides the `devatlas` CLI, a loopback-only HTTP server with a JSON health
-endpoint, persistent registration of existing project directories as
-checkouts of explicitly named projects, and a read-only Git observation for
-each checkout (worktree root, branch or detached HEAD, commit, change counts,
-sanitised remotes) collected by running the local `git` command whenever
-`devatlas list`, `GET /api/projects`, or the HTML home page is produced. It
+**Current state: slice 04, technology status dashboard (first stage).**
+This build provides the `devatlas` CLI, a loopback-only HTTP server,
+persistent registration of existing project directories as checkouts of
+explicitly named projects, a read-only Git observation for each checkout, and
+a per-project technology status: a freshness and a security status decided by
+documented rules from facts read out of Composer and npm manifests and lock
+files, Dockerfiles and Compose files, checked against OSV, endoflife.date,
+the npm registry and Packagist, optionally explained by an AI model through
+one OpenAI-compatible adapter. See "Technology status dashboard" below. It
 does not yet read `project-registry.yaml`, scan directories, talk to Docker,
 analyse ports, run HTTP checks, show ahead/behind counts, or export context;
 every checkout's runtime status is reported as `unknown` with the reason
@@ -23,7 +25,8 @@ every checkout's runtime status is reported as `unknown` with the reason
 - Go 1.22 or newer, available inside WSL. 1.22 is the real minimum: the
   router relies on `net/http.ServeMux` method and `{$}` patterns, which are
   enabled by the `go 1.22` directive in `go.mod`. Use a currently supported
-  Go release in practice; slice 03 was verified with Go 1.27.3 and Go 1.22.12.
+  Go release in practice; slice 03 was verified with Go 1.27.3 and Go 1.22.12,
+  slice 04 with Go 1.22.12.
   Install Go from <https://go.dev/dl/> (for example unpack the Linux tarball
   to `/usr/local/go` and add `/usr/local/go/bin` to `PATH`) or through your
   distribution. The only module dependency is the YAML library
@@ -274,12 +277,21 @@ conflicts on your machine.
 
 | Method and path | Response                                                  |
 | --------------- | --------------------------------------------------------- |
-| `GET /`         | HTML home page: registered projects and checkouts with Git columns, build info, implementation scope |
+| `GET /`         | HTML home page: technology status table, registered checkouts with Git columns, build info, implementation scope |
+| `GET /projects/{id}` | HTML project card: statuses, assessed checkout, findings with evidence, sources and actions, technologies, dependencies, Git |
+| `GET /api/projects/{id}/assessment` | JSON: the stored assessment record (last successful result and last attempt); 404 before the first run |
+| `POST /projects/{id}/assess` | Queues an assessment of one checkout (form field `checkout`, optional); answers 303 |
+| `POST /assess-all` | Queues an assessment of every project; answers 303 |
 | `GET /health`   | JSON: `status`, `service`, `version`, `commit`, `modified`, `checked_at`, `uptime_seconds` |
 | `GET /api/projects` | JSON: `schema_version`, `generated_at`, `registry_file`, `collection`, `runtime_status`, and `projects[]` with `checkouts[]`, each carrying a `git` observation |
 
-Other paths return 404; other methods return 405. There are no mutation
-endpoints: registration changes go through the CLI only.
+Other paths return 404; other methods return 405. Registration changes go
+through the CLI only. The two POST endpoints change nothing in any project:
+they start an assessment whose result is written to DevAtlas's own record
+directory. They are accepted only when the `Host` header names this loopback
+listener and the browser's `Origin` and `Sec-Fetch-Site` headers, when
+present, say the request is same-origin, so a web page open in the same
+browser cannot trigger assessments (or AI spending).
 
 `GET /api/projects` labels every fact with how it was obtained.
 `path_exists` is a stat of the directory at `checked_at`: true for a directory,
@@ -408,6 +420,170 @@ timeout or cancellation. Up to 2 KiB of a failed command's stderr is written
 to the server or CLI log; it is never part of a response. One checkout's
 failure never affects another's observation.
 
+## Technology status dashboard
+
+The home page shows one row per project: purpose, technologies and versions,
+freshness, security, the time of the check, and an "Atnaujinti" button; the
+"Atnaujinti visus" button queues every project. The project card
+(`/projects/{id}`) shows the assessed checkout, every finding with its
+evidence, sources and recommended action, technologies, direct and transitive
+dependencies, and Git state. The dashboard UI is in Lithuanian.
+
+**Scope.** A status covers the support status of declared technologies and
+known vulnerabilities of locked dependencies. It is not a security audit of
+the whole system: the running environment, source code, configuration, and
+secrets are not examined.
+
+### What is read
+
+Only these files, as data, with size limits (2 MiB for manifests and
+infrastructure files, 32 MiB for lock files):
+
+- `composer.json`, `composer.lock`, `package.json`, `package-lock.json`
+  (lockfileVersion 2 or 3) in the checkout root;
+- `Dockerfile*` and `compose*.yml|yaml` / `docker-compose*.yml|yaml` in the
+  root and up to three directory levels below it, plus Dockerfiles named by a
+  Compose `build` section inside the checkout.
+
+No project code, package manager, or install script is ever executed.
+Symbolic links are rejected at every path component. `.env` files are never
+opened; a Compose image that depends on a variable is reported as having no
+determinable version. `vendor`, `node_modules`, `var`, and hidden directories
+are not entered.
+
+Declared and locked versions are kept apart. A constraint such as `^8.2` or
+an image tag is a declaration, shown as such, and never presented as the
+version that runs. A constraint that admits several release lines yields no
+version (it is not narrowed to its lower bound); `8.2.*` or `~8.2.0` does. A
+Dockerfile tag written with `ARG` is resolved from the `ARG` default and
+labelled accordingly.
+
+Yarn, pnpm, Python, Go, Ruby, Rust, Maven, Gradle and .NET are detected and
+shown as "Nepatikrinta" with the reason; so are dependency manifests in
+subdirectories. Coverage is counted over every detected ecosystem, so a
+Composer project with an unchecked `yarn.lock` is not fully checked.
+
+### Status rules
+
+Rules version `2026-11-17.1` (`internal/assess/rules.go`). The colour is
+always decided by these rules; AI text cannot change it.
+
+| Rule | Area | Level | Condition |
+| --- | --- | --- | --- |
+| `SEC-CRITICAL` | security | red | OSV vulnerability of a locked public package with severity critical (database label `CRITICAL` or CVSS v3 base score ≥ 9.0). A development dependency is not exempt. |
+| `SEC-KNOWN` | security | yellow | Any other OSV vulnerability with a known severity. |
+| `SEC-UNKNOWN-SEVERITY` | security | yellow | OSV vulnerability whose severity cannot be established (no rating, only a CVSS v4 vector, or no details record). It is a finding that asks for manual assessment, never the absence of one. |
+| `FRESH-EOL-CRITICAL` | freshness | red | A runtime, framework, or database whose end-of-support date on endoflife.date is today or earlier. |
+| `FRESH-EOL-OTHER` | freshness | yellow | The same for a web server, broker, proxy, or base OS image. |
+| `FRESH-EOL-SOON` | freshness | yellow | End of support within 180 days. |
+| `FRESH-DEPRECATED` | freshness | yellow | Direct dependency marked abandoned on Packagist, or its locked version deprecated on npm. |
+| `FRESH-MAJORS-BEHIND` | freshness | yellow | Direct dependency two or more major versions behind the latest stable release (`@types/*` excepted). |
+| `FRESH-MAJOR-AVAILABLE` | freshness | note | One major version behind. A new major version alone is not a problem. |
+| `FRESH-SECURITY-ONLY` | freshness | note | Active support ended, security fixes continue. |
+
+Area status:
+
+| Findings (red/yellow) | Scope fully checked | Shown |
+| --- | --- | --- |
+| none | yes | 🟢 OK |
+| none | no | ⚪ Nepatikrinta, with the reason |
+| some | yes | the worst colour |
+| some | no | the worst colour + "Dalinė patikra" |
+
+The scope is not fully checked when an ecosystem is unsupported or has no
+usable lock file, a locked package is private or of unknown origin or locked
+to a branch, a recognised technology has no determinable version or its
+release cycle is unknown to endoflife.date (a tag naming only a major version
+is not matched to a minor cycle), a direct dependency is unknown to its
+registry, or a file was rejected. Images that are not in the built-in table
+of official images (private or third-party images) are listed on the card as
+outside the scope and do not count against coverage.
+
+Support dates are compared with the date of each run; the service's own
+"is EOL" flag is used only when it gives no date.
+
+### External sources and what is sent
+
+| Source | Used for | What is sent |
+| --- | --- | --- |
+| OSV (`api.osv.dev`) | known vulnerabilities | name and locked version of public packages. The batch endpoint returns identifiers only and is paginated per query; details are fetched per identifier. Severity arrives as a CVSS vector, so the v3 base score is computed locally. |
+| endoflife.date (v1 API) | support dates | a product name from a fixed table, nothing from the project. Date fields may be null. |
+| npm registry | latest version, deprecation | name and locked version of public direct dependencies. Only the small `/{name}/latest` and `/{name}/{version}` manifests are requested, never the full package document; deprecation is read from the locked version. |
+| Packagist (`repo.packagist.org/p2`) | latest version, abandoned flag | name of public direct dependencies. The metadata is minified (only the first entry is complete) and lists pre-releases first, so the latest stable release is found by comparing version numbers. |
+
+A package name leaves the machine only when the lock file itself proves a
+public origin: `notification-url` equal to Packagist's for Composer, a
+`resolved` URL on `registry.npmjs.org` for npm. Anything else is private or
+of unknown origin, is never named to any service (its publicity is not
+tested by asking a registry), and counts as unchecked. Requests have a
+20 s timeout, at most 2 retries on network errors, 429 and 5xx, a budget of
+1200 requests per assessment, response size limits, and no redirects.
+Answers are cached in memory for 10 minutes, except the OSV batch query.
+
+### AI explanations
+
+Optional. Copy `.env.example` to `.env` in the directory where `devatlas
+serve` is started, or to `~/.config/devatlas/.env`, or pass `-env-file`:
+
+```sh
+DEVATLAS_AI_BASE_URL=https://api.openai.com/v1   # any OpenAI-compatible API root
+DEVATLAS_AI_MODEL=<model name>
+DEVATLAS_AI_API_KEY=<key>                        # optional for local servers
+```
+
+The base URL must use https unless the host is local. The file is parsed
+into a structure; the values are not exported into the process environment,
+and any inherited `DEVATLAS_AI_*` variable is removed from it at start-up and
+filtered from the environment of `git` child processes. The key is sent only
+in the `Authorization` header of the AI request and never appears in HTML,
+API responses, stored records, or logs; provider error bodies are not shown
+or logged.
+
+The model receives the rule findings (component names, versions, dates,
+advisory identifiers and summaries) and returns, per finding, an explanation
+and concrete steps. It receives no file paths, raw declarations, private
+names, or `.env` content, and it has no tools. Its answer is validated: only
+the agreed JSON shape is accepted, texts for unknown finding identifiers are
+dropped, as are texts containing an address or an advisory identifier that
+was not in the finding's evidence. Findings, levels, sources, and the rule's
+own recommended action are always rendered from the rule results, so an
+unavailable or rejected AI answer hides nothing.
+
+Explanations are reused while their input is identical. The reuse key covers
+the assessed files' hash, the findings with their evidence (which carries the
+external conclusions), the area statuses, the rules version, the prompt and
+its version, and the model.
+
+### Stored results, times, and staleness
+
+One JSON record per project under `assessments/` next to the registration
+file, written atomically with mode 0600. A record keeps the last successful
+result and the last attempt separately:
+
+- `sources_checked_at`: when the sources were queried and the rules
+  evaluated;
+- `ai.generated_at`: when the explanations were generated (unchanged on
+  reuse);
+- `last_attempt.at`, `ok`, `error`: the most recent run.
+
+An attempt fails when the checkout cannot be read or an external source is
+unreachable or answers with something uninterpretable. A failed attempt
+leaves the previous result and its dates untouched and is shown next to it.
+External data is fetched on every run, whether or not project files changed.
+
+A result is tied to the checkout path, HEAD, the uncommitted-changes flag,
+and a hash of the assessed files. It is marked "Pasenęs" when it is older
+than 24 hours, the rules version changed, HEAD or the uncommitted-changes
+flag changed, the checkout was unregistered, or (on the card) the assessed
+files changed. With several checkouts the card offers a choice; the table
+names the checkout that was assessed.
+
+Assessments run one at a time from a bounded queue (64 jobs), at most one
+queued or running job per project, with a 6-minute limit per job and a
+20-second pause before the same project can be queued again. Periodic
+re-assessment is not implemented: statuses change only when a button is
+pressed. DevAtlas never changes a project or updates a dependency.
+
 ## Dependencies
 
 | Module | Version | Why |
@@ -421,7 +597,12 @@ Everything else is the Go standard library.
 ```text
 cmd/devatlas/            CLI entry point
 internal/cli/            command dispatch, flags, signal handling
+internal/assess/         status rules, AI adapter and answer validation, record store, queue
+internal/atomicfile/     atomic file replacement for assessment records
 internal/collect/git/    read-only Git observations: safe execution, status parsing, remote sanitisation
+internal/collect/stack/  technology facts from manifests, lock files, Dockerfiles, Compose files
+internal/config/         .env parsing into a structure; secret type
+internal/sources/        OSV, endoflife.date, npm and Packagist clients; public-package filter
 internal/httpserver/     loopback HTTP server, handlers, templates, /api/projects
 internal/registry/       registration model: projects, checkouts, identity rules
 internal/registryfile/   YAML persistence, atomic writes, locking, config path
@@ -437,4 +618,6 @@ implementation_brief.md  approved scope document this work follows
 The registration file described above holds machine-specific absolute paths
 and lives under the user configuration directory, never inside a project
 repository. Other local settings (`devatlas.local.yaml`, `*.local.yaml`) are
-reserved by `.gitignore` but not read yet.
+reserved by `.gitignore` but not read yet. `.env` (ignored by Git) holds the
+optional AI adapter settings described under "AI explanations"; assessment
+records live in `assessments/` next to the registration file.

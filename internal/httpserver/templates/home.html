@@ -16,11 +16,59 @@
     th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.4); vertical-align: top; }
     .warn { border: 1px solid #c60; padding: 0.5rem 0.75rem; border-radius: 4px; }
     .small { font-size: 0.85rem; }
+    .status { white-space: nowrap; font-weight: 600; }
+    .badge { display: inline-block; font-size: 0.75rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.25rem; }
+    .stale { color: #b45309; }
+    .flash { border: 1px solid #2563eb; padding: 0.5rem 0.75rem; border-radius: 4px; }
+    form.inline { display: inline; margin: 0; }
+    button { font: inherit; padding: 0.15rem 0.6rem; cursor: pointer; }
+    .scroll { overflow-x: auto; }
   </style>
+  {{if .Refresh}}<meta http-equiv="refresh" content="4;url=/">{{end}}
 </head>
 <body>
   <h1>DevAtlas</h1>
   <p class="muted">Local project registry for a developer workstation.</p>
+
+  <section>
+    <h2>Projektų technologinė būklė</h2>
+    <p class="muted small">{{.ScopeNote}}</p>
+    {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+    {{if .RegistryError}}
+    <p class="warn">Registracijų failo nepavyko perskaityti; būklės lentelė nerodoma.</p>
+    {{else if not .Rows}}
+    <p>Projektų dar nėra. Užregistruokite: <code>devatlas add -project &lt;id&gt; -name "&lt;pavadinimas&gt;" &lt;katalogas&gt;</code>.</p>
+    {{else}}
+    {{if .Enabled}}
+    <form class="inline" method="post" action="/assess-all"><button type="submit">Atnaujinti visus</button></form>
+    <span class="muted small">Vertinimai vykdomi po vieną; rezultatai išsaugomi. {{if .AIModel}}DI paaiškinimų modelis: <code>{{.AIModel}}</code>.{{else}}DI adapteris nesukonfigūruotas: rodomi tik taisyklių radiniai.{{end}}</span>
+    {{else}}
+    <p class="warn">Vertinimas šiame procese neįjungtas.</p>
+    {{end}}
+    <div class="scroll">
+    <table>
+      <thead><tr><th>Projektas</th><th>Paskirtis</th><th>Technologijos ir versijos</th><th>Naujumas</th><th>Saugumas</th><th>Patikrinta</th><th></th></tr></thead>
+      <tbody>
+      {{range .Rows}}
+        <tr>
+          <td><a href="/projects/{{.ID}}">{{.Name}}</a><br><span class="muted small">{{.ID}}</span></td>
+          <td class="small">{{if .Description}}{{.Description}}{{else}}<span class="muted">&ndash;</span>{{end}}</td>
+          <td class="small">{{range .Tech}}{{.}}<br>{{else}}<span class="muted">&ndash;</span>{{end}}</td>
+          <td><span class="status {{.Fresh.Class}}">{{.Fresh.Icon}} {{.Fresh.Label}}</span>{{if .Fresh.Partial}}<span class="badge">Dalinė patikra</span>{{end}}<br><span class="muted small">{{.Fresh.Reason}}</span></td>
+          <td><span class="status {{.Sec.Class}}">{{.Sec.Icon}} {{.Sec.Label}}</span>{{if .Sec.Partial}}<span class="badge">Dalinė patikra</span>{{end}}<br><span class="muted small">{{.Sec.Reason}}</span></td>
+          <td class="small">{{if .CheckedAt}}{{.CheckedAt}}{{else}}<span class="muted">&ndash;</span>{{end}}
+            {{if .Stale}}<br><span class="stale">Pasenęs: {{range $i, $r := .Stale}}{{if $i}}; {{end}}{{$r}}{{end}}</span>{{end}}
+            {{if and .AttemptNote .CheckedAt}}<br><span class="stale">{{.AttemptNote}}</span>{{end}}
+            {{if .Checkout}}<br><span class="muted">{{.Checkout}}{{if gt .Checkouts 1}} (1 iš {{.Checkouts}} checkout)</span>{{else}}</span>{{end}}{{end}}</td>
+          <td>{{if .Job}}<em>{{.Job}}</em>{{else if $.Enabled}}<form class="inline" method="post" action="/projects/{{.ID}}/assess"><button type="submit">Atnaujinti</button></form>{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+    <p class="muted small">🟢 nurodyta apimtis patikrinta, žinomų problemų nenustatyta · 🟡 yra planine tvarka spręstinų problemų · 🔴 yra neatidėliotinai spręstina problema · ⚪ „Nepatikrinta“: patikra nepilna ir radinių nėra · „Dalinė patikra“: radinių yra, bet patikrinta ne visa apimtis. Spalvą nustato taisyklės; DI tik paaiškina radinius. Rodomas išsaugotas paskutinio sėkmingo vertinimo rezultatas.</p>
+    {{end}}
+  </section>
 
   <section>
     <h2>This instance</h2>
@@ -84,7 +132,7 @@
       {{end}}
     </ul>
     <h3>Not yet implemented</h3>
-    <p class="muted">Nothing below is available in this build. No project data is collected or stored.</p>
+    <p class="muted">Nothing below is available in this build.</p>
     <ul>
       {{range .Scope.Deferred}}<li>{{.}}</li>
       {{end}}

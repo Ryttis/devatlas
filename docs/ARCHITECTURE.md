@@ -1,6 +1,6 @@
 # DevAtlas architecture
 
-Status: slice 03 (read-only Git checkout observations). This document
+Status: slice 04 (technology status dashboard, first stage). This document
 describes what exists now and the boundaries later slices are expected to
 respect. Anything listed under "planned" is not implemented.
 
@@ -9,8 +9,11 @@ respect. Anything listed under "planned" is not implemented.
 DevAtlas is a local, read-only registry of the projects developed on one
 workstation: their checkouts and worktrees, declared and observed ports,
 container status, configured HTTP checks, documents, and AI context. It runs
-as a single Go process inside WSL2, binds only to loopback, and uses no LLM or
-cloud service for inventory, status collection, or diagnostics.
+as a single Go process inside WSL2 and binds only to loopback. Inventory, Git
+observation, and every status decision work without an LLM. The technology
+status dashboard queries four public data services and, optionally, one AI
+model that explains rule findings; see "Technology status" below for exactly
+what leaves the machine.
 
 ## Current structure
 
@@ -28,8 +31,22 @@ internal/collect/git         first collector adapter: runs the local git command
                              read-only with deadlines, output caps, process-group
                              isolation, and a sanitised remote model; returns an
                              Observation per path with status, source, and time
+internal/collect/stack       second collector adapter: reads Composer and npm
+                             manifests and lock files, Dockerfiles, and Compose
+                             files as data; no execution, no symlinks, no .env,
+                             bounded sizes; keeps declared and locked versions apart
+internal/sources             OSV, endoflife.date, npm, Packagist clients with
+                             timeouts, bounded retries, a request budget, and the
+                             PublicPackage type that gates what may be named
+internal/assess              pure status rules, AI adapter with answer
+                             validation, atomic JSON record store, engine, and
+                             the single-worker bounded queue
+internal/config              .env parsing into a structure; Secret type
+internal/atomicfile          temp file + rename for assessment records
 internal/httpserver          loopback listener, timeouts, graceful shutdown,
-                             GET /health, GET /api/projects, GET / (html/template);
+                             GET /health, GET /api/projects, GET / and
+                             GET /projects/{id} (html/template), the two guarded
+                             POST endpoints that queue assessments;
                              ObserveProjects joins registrations with observations
 internal/version             version string, VCS commit from Go build info
 ```
@@ -92,8 +109,12 @@ module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The
   registry replacement and waits at most 10 seconds. Parent-directory aliases
   are resolved; file symlinks and hard links are rejected. Writes are supported
   only on Linux/WSL with local filesystem locking and rename semantics.
-- **Read-only HTTP.** The server exposes GET only. Registrations change
-  through the CLI, which is also where the lock and validation live.
+- **HTTP changes nothing in a project.** Registrations change through the
+  CLI, which is also where the lock and validation live. The only non-GET
+  endpoints queue an assessment; they require a `Host` header naming this
+  listener and same-origin `Origin` / `Sec-Fetch-Site` headers when a
+  browser sends them, because a loopback port is reachable from any page in
+  the user's browser.
 - **Observations are per request and self-describing.** `ObserveProjects`
   collects Git observations for the checkouts of one response under the
   request context, so a disconnecting client cancels running commands.
@@ -112,6 +133,59 @@ module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The
   text; raw stderr goes to the log only. It never fetches, checks out,
   stages, commits, or edits configuration, and it never groups projects by
   remote.
+
+## Technology status
+
+Data flow of one assessment, started by a button and run by the single
+worker:
+
+```text
+registered checkout
+  -> collect/git        HEAD, branch, uncommitted changes (ties the result to a state)
+  -> collect/stack      facts + gaps + hash of the files read
+  -> sources            endoflife.date per recognised product with a concrete version,
+                        OSV for public locked packages, npm/Packagist for public direct ones
+  -> assess.Evaluate    pure function (facts, external data, today) -> findings, statuses
+  -> assess AI adapter  optional texts attached to existing finding IDs, validated
+  -> assess.Store       atomic JSON record: last successful result + last attempt
+  -> httpserver         table and card render the stored record; nothing is evaluated on render
+```
+
+Decisions in force:
+
+- **Rules decide, AI explains.** `Evaluate` produces every finding, level,
+  source link, and recommended action. The AI answer is a map from existing
+  finding IDs to two texts; it has no field for a status, a level, a source,
+  or a new finding, and texts that fail validation are dropped. A failed or
+  rejected AI call is recorded on the result and changes nothing else.
+- **Green needs complete coverage.** Every part of the stated scope that
+  could not be checked is a gap. No findings with a gap is "Nepatikrinta";
+  findings with a gap keep their colour and gain "Dalinė patikra".
+- **Nothing is guessed.** A declaration that does not determine a version
+  yields no version. Declared and locked values are separate fields with a
+  recorded basis, and neither is called a running version.
+- **What may leave the machine is a type, not a convention.** Query
+  functions take `sources.PublicPackage`, which only `Publishable` can
+  construct, and only for packages whose lock entry proves a public-registry
+  origin. Product names come from a fixed table. AI input is built from
+  findings, which exist only for those packages and products, with file
+  paths and raw declarations removed.
+- **A failed attempt is not a result.** Source failures fail the attempt and
+  leave the previous result and its dates intact, so an outage cannot turn
+  known findings into "Nepatikrinta". Sources-checked, AI-generated, and
+  last-attempt times are stored separately.
+- **External data is always refetched; dates are compared with today.** The
+  only cache is a 10-minute in-memory one for identical lookups within and
+  across the jobs of one "refresh all".
+- **Secrets stay in a structure.** `.env` is parsed into `config.AI`; the
+  key is a `config.Secret` that prints as a placeholder everywhere, the
+  `DEVATLAS_AI_*` variables are removed from the process environment, and the
+  Git adapter filters them from child environments.
+- **One worker, bounded queue, one job per project**, with a per-job
+  deadline and a short cooldown. Periodic refresh is deliberately deferred.
+
+Not implemented: periodic re-assessment, Yarn/pnpm/Python/Go parsing,
+manifests in subdirectories, history of results.
 
 ## Intended package layout and adapter boundaries (planned)
 
@@ -171,7 +245,16 @@ Unit tests cover argument errors, loopback enforcement, health output, the
 home page, occupied-port reporting, graceful shutdown with an in-flight
 request, checkout identity (symlinks, relative paths, worktrees), project
 name rules, safe removal, persistence across reloads, malformed-file
-handling and recovery without exposing YAML values, concurrent updates from
+handling and recovery without exposing YAML values, the technology status
+rules (status matrix, critical dev dependency, unknown severity, dates
+against today, undetermined versions), the collector (declared versus locked,
+origins, symlink and size rejection, no `.env` access), the source clients
+against an in-process fake (OSV pagination and alias de-duplication, CVSS
+computation, retries, budget, minified Packagist metadata, npm manifests),
+AI answer validation, key and private-name exclusion from requests, records,
+responses, and logs, failed attempts keeping the previous result, the queue,
+the POST guards, and the full table → refresh → result → card flow,
+concurrent updates from
 separate CLI processes, alias rejection, bounded lock waits, HTML escaping of
 project names and branch names, and the read-only API. The Git adapter is
 tested against real temporary repositories (unborn, clean, staged, unstaged,

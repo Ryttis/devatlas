@@ -10,10 +10,17 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/Ryttis/devatlas/internal/assess"
+	"github.com/Ryttis/devatlas/internal/collect/git"
+	"github.com/Ryttis/devatlas/internal/collect/stack"
+	"github.com/Ryttis/devatlas/internal/config"
 	"github.com/Ryttis/devatlas/internal/httpserver"
+	"github.com/Ryttis/devatlas/internal/sources"
 	"github.com/Ryttis/devatlas/internal/version"
 )
 
@@ -40,6 +47,10 @@ Commands:
 Registrations are stored in a YAML file under the user configuration
 directory (~/.config/devatlas/registrations.yaml). Override the location
 with -config PATH on any command or with the DEVATLAS_CONFIG variable.
+
+"serve" also shows the technology status dashboard. Optional AI explanations
+are configured with DEVATLAS_AI_BASE_URL, DEVATLAS_AI_MODEL and
+DEVATLAS_AI_API_KEY in a .env file (see .env.example and "serve -h").
 
 Run "devatlas <command> -h" for command flags.
 `
@@ -108,6 +119,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	fs.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "time allowed for in-flight requests on shutdown")
 	logLevel := fs.String("log-level", "info", "log level: debug, info, warn, error")
 	configFlag := addConfigFlag(fs)
+	envFile := fs.String("env-file", "", "file with DEVATLAS_AI_* settings (default: ./.env, else .env next to the registration file)")
 	fs.Usage = func() {
 		fmt.Fprintln(stderr, "Usage: devatlas serve [flags]")
 		fmt.Fprintln(stderr, "Start the DevAtlas HTTP server. It only ever binds to a loopback address.")
@@ -147,11 +159,42 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	logger.Info("using registration file", "path", store.Path())
 	logger.Info("git observations are collected per request by running git locally; nothing is cached")
 
+	// The AI settings are read into a structure and removed from the process
+	// environment before anything can start a child process.
+	envPath := *envFile
+	if envPath == "" {
+		envPath = ".env"
+		if _, err := os.Stat(envPath); err != nil {
+			envPath = filepath.Join(filepath.Dir(store.Path()), ".env")
+		}
+	}
+	aiCfg, err := config.Load(envPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: AI configuration: %v\n", err)
+		return ExitFailure
+	}
+	if aiCfg.Enabled() {
+		logger.Info("AI explanations enabled", "host", aiCfg.Host(), "model", aiCfg.Model, "api_key_set", aiCfg.APIKey.IsSet())
+	} else {
+		logger.Info("AI explanations disabled: DEVATLAS_AI_BASE_URL and DEVATLAS_AI_MODEL are not set; rule results are still produced")
+	}
+
 	srv, err := httpserver.New(cfg, store, logger)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return ExitUsage
 	}
+	engine := &assess.Engine{
+		Sources: sources.NewClient("devatlas/" + version.Current().Version),
+		AI:      assess.NewAIClient(aiCfg),
+		Store:   assess.NewStore(filepath.Join(filepath.Dir(store.Path()), assess.DirName)),
+		Git:     git.NewCollector(git.Options{Logger: logger}),
+		Log:     logger,
+		Now:     time.Now,
+		Collect: stack.Collect,
+	}
+	srv.SetAssessment(assess.NewService(engine))
+	logger.Info("technology assessments run only on request and are stored as JSON", "dir", engine.Store.Dir())
 	ln, err := srv.Listen()
 	if err != nil {
 		var inUse *httpserver.AddrInUseError

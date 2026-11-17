@@ -168,7 +168,8 @@ func filteredEnv() []string {
 	out := env[:0:0]
 	for _, kv := range env {
 		key, _, _ := strings.Cut(kv, "=")
-		skip := false
+		// Credentials of the AI adapter must never reach a child process.
+		skip := strings.HasPrefix(key, "DEVATLAS_AI_")
 		for _, s := range strippedEnv {
 			if key == s {
 				skip = true

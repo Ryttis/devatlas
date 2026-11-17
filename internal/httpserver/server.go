@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Ryttis/devatlas/internal/assess"
 	"github.com/Ryttis/devatlas/internal/collect/git"
 	"github.com/Ryttis/devatlas/internal/version"
 )
@@ -24,6 +25,11 @@ type Server struct {
 	git      GitObserver
 	http     *http.Server
 	started  time.Time
+	// assess is nil when the technology status dashboard is not enabled.
+	assess *assess.Service
+	// allowedHosts are the Host header values that name this listener; set
+	// by Listen and used to guard state-changing requests.
+	allowedHosts map[string]bool
 }
 
 // New builds a server from cfg that presents the registrations provided by
@@ -71,6 +77,12 @@ func (s *Server) Listen() (net.Listener, error) {
 		// err is a *net.OpError whose text already names the address.
 		return nil, fmt.Errorf("cannot start listener: %w", err)
 	}
+	if _, port, err := net.SplitHostPort(ln.Addr().String()); err == nil {
+		s.allowedHosts = map[string]bool{}
+		for _, h := range []string{"127.0.0.1", "localhost", "[::1]"} {
+			s.allowedHosts[h+":"+port] = true
+		}
+	}
 	return ln, nil
 }
 
@@ -80,6 +92,24 @@ func (s *Server) Listen() (net.Listener, error) {
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	s.started = time.Now()
 	s.log.Info("devatlas listening", "url", "http://"+ln.Addr().String(), "version", version.Current().Version)
+
+	// The single assessment worker lives exactly as long as the server.
+	workerDone := make(chan struct{})
+	if s.assess != nil {
+		workerCtx, stopWorker := context.WithCancel(ctx)
+		defer func() {
+			stopWorker()
+			select {
+			case <-workerDone:
+			case <-time.After(s.cfg.ShutdownTimeout):
+				s.log.Warn("assessment worker did not stop in time")
+			}
+		}()
+		go func() {
+			defer close(workerDone)
+			s.assess.Run(workerCtx)
+		}()
+	}
 
 	serveErr := make(chan error, 1)
 	go func() {

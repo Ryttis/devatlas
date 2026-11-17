@@ -40,7 +40,7 @@ type Scope struct {
 // CurrentScope returns the implementation status of this build.
 func CurrentScope() Scope {
 	return Scope{
-		Slice: "03 — read-only Git checkout observations",
+		Slice: "04 — technology status dashboard (first stage)",
 		Implemented: []string{
 			"devatlas CLI: version, serve, add, list, remove",
 			"loopback-only HTTP server with configurable port and graceful shutdown",
@@ -65,6 +65,10 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /api/projects", s.handleProjects)
+	mux.HandleFunc("GET /api/projects/{id}/assessment", s.handleAssessmentAPI)
+	mux.HandleFunc("GET /projects/{id}", s.handleProject)
+	mux.HandleFunc("POST /projects/{id}/assess", s.handleAssess)
+	mux.HandleFunc("POST /assess-all", s.handleAssessAll)
 	mux.HandleFunc("GET /{$}", s.handleHome)
 	return mux
 }
@@ -103,6 +107,13 @@ type homeData struct {
 	Registrations *ProjectsResponse
 	RegistryError string
 	RegistryFile  string
+	// Technology status dashboard.
+	Rows      []rowView
+	ScopeNote string
+	Flash     string
+	Enabled   bool
+	Refresh   bool
+	AIModel   string
 }
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +131,12 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	} else {
 		resp := ObserveProjects(r.Context(), reg.Views(), s.registry.Path(), now, s.git)
 		data.Registrations = &resp
+		data.Rows = s.buildRows(&resp, now)
+	}
+	data.ScopeNote = ScopeNote
+	data.Flash = flashMessages[r.URL.Query().Get("msg")]
+	if s.assess != nil {
+		data.Enabled, data.Refresh, data.AIModel = true, s.assess.Active(), s.assess.AIModel()
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
