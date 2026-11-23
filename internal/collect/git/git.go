@@ -1,5 +1,5 @@
 // Package git observes the state of registered checkouts by running the local
-// git command. It is strictly read-only: it never fetches, checks out, stages,
+// git command. It is strictly read-only: it never fetches, pulls, merges, checks out, stages,
 // commits, or changes configuration, and it asks Git not to take optional
 // locks or refresh the index. Every observation records when it was collected
 // and from which source, and a failure of one checkout never affects another.
@@ -74,6 +74,8 @@ type Repository struct {
 	Changes            Changes `json:"changes"`
 	// Remotes lists every configured remote URL with credentials removed.
 	Remotes []Remote `json:"remotes"`
+	// Tracking compares HEAD with locally available remote-tracking refs.
+	Tracking Tracking `json:"tracking"`
 }
 
 // Head describes what HEAD points to.
@@ -259,7 +261,8 @@ func (c *Collector) Observe(ctx context.Context, path string) Observation {
 	if rerr != nil {
 		return finish(c.failure(obs, rerr))
 	}
-	if err := c.status(ctx, path, repo); err != nil {
+	statusOut, err := c.status(ctx, path, repo)
+	if err != nil {
 		return finish(c.failure(obs, err))
 	}
 	remotes, err := c.remotes(ctx, path)
@@ -267,6 +270,7 @@ func (c *Collector) Observe(ctx context.Context, path string) Observation {
 		return finish(c.failure(obs, err))
 	}
 	repo.Remotes = remotes
+	repo.Tracking = c.tracking(ctx, path, repo, statusOut)
 	obs.Repository = repo
 	return finish(obs)
 }
@@ -314,17 +318,19 @@ func (c *Collector) layout(ctx context.Context, path string) (*Repository, error
 	return repo, nil
 }
 
-func (c *Collector) status(ctx context.Context, path string, repo *Repository) error {
+// status fills Head and Changes and returns the raw output, whose upstream
+// headers are interpreted by tracking.
+func (c *Collector) status(ctx context.Context, path string, repo *Repository) ([]byte, error) {
 	out, err := c.run(ctx, path, "status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	head, changes, err := parseStatusV2(out)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	repo.Head, repo.Changes = head, changes
-	return nil
+	return out, nil
 }
 
 func (c *Collector) remotes(ctx context.Context, path string) ([]Remote, error) {

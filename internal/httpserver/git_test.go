@@ -99,9 +99,87 @@ func TestGitObservationsInAPIAndHTML(t *testing.T) {
 	if strings.Contains(html, "s3cret") || strings.Contains(html, "<b>x</b>") {
 		t.Fatalf("home page leaked a credential or did not escape the branch name:\n%s", html)
 	}
-	for _, want := range []string{"feature/&lt;b&gt;x&lt;/b&gt;", r.Git.Repository.Head.Commit[:12], "1 untracked", "gitlab.com", "[gitlab]", "not_git", "not a Git repository", "collected for this page view"} {
+	for _, want := range []string{"feature/&lt;b&gt;x&lt;/b&gt;", "1 uncommitted", "Not a Git repository", "Based on last fetched refs", "Unknown", mustCanonical(t, repo)} {
 		if !strings.Contains(html, want) {
 			t.Errorf("home page missing %q", want)
+		}
+	}
+	code, html, _ = getBody(t, base+"/projects/p")
+	if code != http.StatusOK {
+		t.Fatalf("project status %d", code)
+	}
+	if strings.Contains(html, "s3cret") || strings.Contains(html, "<b>x</b>") {
+		t.Fatalf("project page leaked a credential or did not escape the branch name:\n%s", html)
+	}
+	for _, want := range []string{"feature/&lt;b&gt;x&lt;/b&gt;", r.Git.Repository.Head.Commit[:12], "1 untracked", "gitlab.com", "[gitlab]", "not_git", "Not a Git repository", "Based on last fetched refs", "no upstream is configured for this branch", "FETCH_HEAD last updated"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("project page missing %q", want)
+		}
+	}
+}
+
+// A clone that is ahead of and behind its remote shows the counts from the
+// local remote-tracking refs, on the dashboard and on the project page.
+func TestAheadBehindInAPIAndHTML(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	origin := filepath.Join(root, "origin")
+	clone := filepath.Join(root, "clone")
+	os.Mkdir(origin, 0o755)
+	gitSetup(t, origin, "-c", "init.defaultBranch=main", "init", "-q")
+	commit := func(dir, name string) {
+		os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644)
+		gitSetup(t, dir, "add", name)
+		gitSetup(t, dir, "commit", "-q", "-m", name)
+	}
+	commit(origin, "a")
+	gitSetup(t, root, "clone", "-q", origin, clone)
+	commit(origin, "b")
+	commit(origin, "c")
+	gitSetup(t, clone, "fetch", "-q")
+	gitSetup(t, clone, "checkout", "-q", "-b", "work")
+	commit(clone, "d")
+
+	store := testStore(t)
+	if err := store.Update(func(reg *registry.Registry) error {
+		_, err := reg.Add(registry.AddRequest{ProjectID: "p", Name: "P", Path: clone})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base, stop := startTestServerWith(t, store)
+	defer func() { _ = stop() }()
+
+	_, body, _ := getBody(t, base+"/api/projects")
+	var resp ProjectsResponse
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatal(err)
+	}
+	tr := resp.Projects[0].Checkouts[0].Git.Repository.Tracking
+	if tr.Basis != git.TrackingBasis || tr.DefaultBranch == nil || tr.DefaultBranch.Ref != "origin/main" || tr.DefaultBranch.Source != git.DefaultFromRemoteHead {
+		t.Fatalf("default branch: %+v %+v", tr, tr.DefaultBranch)
+	}
+	if d := tr.Default; !d.Known || d.Ahead != 1 || d.Behind != 2 || d.Ref != "origin/main" {
+		t.Errorf("default divergence: %+v", d)
+	}
+	if tr.Upstream.Known || tr.Upstream.Reason == "" {
+		t.Errorf("a branch without upstream must be unknown: %+v", tr.Upstream)
+	}
+	if tr.FetchHeadUpdatedAt == nil || time.Since(*tr.FetchHeadUpdatedAt) > time.Hour {
+		t.Errorf("last fetch: %v", tr.FetchHeadUpdatedAt)
+	}
+	_, home, _ := getBody(t, base+"/")
+	for _, want := range []string{"<code>work</code>", "clean", "1 ahead, 2 behind <code>origin/main</code>", "Based on last fetched refs"} {
+		if !strings.Contains(home, want) {
+			t.Errorf("home page missing %q", want)
+		}
+	}
+	_, card, _ := getBody(t, base+"/projects/p")
+	for _, want := range []string{"1 ahead, 2 behind <code>origin/main</code>", "(from <code>origin/HEAD</code>)", "no upstream is configured for this branch", "FETCH_HEAD", "Based on last fetched refs"} {
+		if !strings.Contains(card, want) {
+			t.Errorf("project page missing %q", want)
 		}
 	}
 }

@@ -33,7 +33,7 @@ func parseStatusV2(out []byte) (Head, Changes, error) {
 				head.Branch = v
 			}
 		case strings.HasPrefix(rec, "# "):
-			// other headers (upstream, ahead/behind, stash) are not used
+			// upstream and ahead/behind headers are read by parseUpstream
 		case strings.HasPrefix(rec, "1 "), strings.HasPrefix(rec, "2 "):
 			fields := strings.SplitN(rec, " ", 3)
 			if len(fields) < 3 || len(fields[1]) != 2 {

@@ -1,0 +1,100 @@
+{{define "style"}}
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7f9; --panel: #ffffff; --text: #1c2330; --muted: #5d6778; --line: #dfe3ea;
+      --accent: #2456c4; --ok: #17794a; --warn: #a15c00; --bad: #b3261e;
+      --ok-bg: #e4f4ea; --warn-bg: #fdf0d8; --bad-bg: #fbe5e3; --none-bg: #eceef2;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14171c; --panel: #1c2129; --text: #e4e8ef; --muted: #9aa4b5; --line: #2e3540;
+        --accent: #8ab0ff; --ok: #6fd3a0; --warn: #f0b860; --bad: #ff8f86;
+        --ok-bg: #173526; --warn-bg: #3b2d12; --bad-bg: #40201d; --none-bg: #2a303a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    a { color: var(--accent); }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; overflow-wrap: anywhere; }
+    .topbar { background: var(--panel); border-bottom: 1px solid var(--line); }
+    .topbar .inner { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1.5rem; max-width: 76rem; margin: 0 auto; padding: 0.6rem 1rem; }
+    .brand { font-weight: 700; font-size: 1.1rem; color: var(--text); text-decoration: none; }
+    .topbar nav { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+    .topbar nav a { padding: 0.25rem 0.7rem; border-radius: 6px; text-decoration: none; color: var(--muted); }
+    .topbar nav a:hover { color: var(--text); }
+    .topbar nav a[aria-current="page"] { background: var(--none-bg); color: var(--text); font-weight: 600; }
+    main { max-width: 76rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+    h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+    h2 { font-size: 1.15rem; margin: 0 0 0.6rem; }
+    h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
+    section { margin-top: 1.75rem; }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.85rem; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
+    .panel + .panel { margin-top: 0.9rem; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+    th, td { text-align: left; padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    thead th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); white-space: nowrap; }
+    .warn { border: 1px solid var(--warn); background: var(--warn-bg); padding: 0.6rem 0.8rem; border-radius: 6px; }
+    .flash { border: 1px solid var(--accent); padding: 0.6rem 0.8rem; border-radius: 6px; }
+    .chip { display: inline-block; font-size: 0.78rem; font-weight: 600; line-height: 1.5; border-radius: 999px; padding: 0 0.55rem; background: var(--none-bg); color: var(--muted); white-space: nowrap; }
+    .chip.green, .chip.ok { background: var(--ok-bg); color: var(--ok); }
+    .chip.yellow, .chip.dirty { background: var(--warn-bg); color: var(--warn); }
+    .chip.red { background: var(--bad-bg); color: var(--bad); }
+    .na { color: var(--muted); font-style: italic; }
+    .btn, button { font: inherit; padding: 0.2rem 0.7rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); cursor: pointer; text-decoration: none; display: inline-block; }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); font-weight: 600; }
+    select { font: inherit; max-width: 100%; }
+    form.inline { display: inline; margin: 0; }
+    dl.facts { display: grid; grid-template-columns: minmax(9rem, max-content) 1fr; gap: 0.3rem 1rem; margin: 0; }
+    dl.facts dt { color: var(--muted); }
+    dl.facts dd { margin: 0; overflow-wrap: anywhere; }
+    pre.cmd { background: var(--none-bg); border-radius: 6px; padding: 0.6rem 0.8rem; overflow-x: auto; margin: 0.5rem 0; }
+    .status { font-weight: 600; }
+    .badge { display: inline-block; font-size: 0.75rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.25rem; }
+    .stale { color: var(--warn); }
+    .finding { border: 1px solid var(--line); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.6rem 0; }
+    .finding h4 { margin: 0 0 0.3rem 0; }
+    .finding dl { margin: 0.3rem 0; display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.75rem; font-size: 0.9rem; }
+    .finding dt { color: var(--muted); }
+    .finding dd { margin: 0; overflow-wrap: anywhere; }
+    .ai { border-left: 3px solid #7c3aed; padding-left: 0.6rem; margin-top: 0.4rem; font-size: 0.92rem; }
+    summary { cursor: pointer; }
+
+    /* Dashboard table: one tbody per project, one row per checkout. */
+    table.projects tbody + tbody tr:first-child td { border-top: 1px solid var(--line); }
+    table.projects td { border-bottom: 0; }
+    table.projects .name { font-weight: 600; }
+    table.projects td[data-label="Project"] { min-width: 9rem; }
+    table.projects .na, table.projects .assess { white-space: nowrap; }
+    table.projects .git > * { margin-right: 0.3rem; }
+    @media (max-width: 760px) {
+      dl.facts { grid-template-columns: 1fr; gap: 0; }
+      dl.facts dd { margin-bottom: 0.45rem; }
+      table.projects, table.projects tbody, table.projects td { display: block; }
+      table.projects thead { display: none; }
+      table.projects tr { display: contents; }
+      table.projects tbody { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.25rem; margin-bottom: 0.8rem; }
+      table.projects tbody + tbody tr:first-child td { border-top: 0; }
+      table.projects td { padding: 0.25rem 0.65rem; }
+      table.projects td[data-label]::before { content: attr(data-label); display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+      table.projects td.open { order: 99; padding-top: 0.5rem; }
+      .tablepanel { background: none; border: 0; padding: 0; }
+    }
+  </style>
+{{end}}
+
+{{define "nav"}}
+  <header class="topbar"><div class="inner">
+    <a class="brand" href="/">DevAtlas</a>
+    <nav aria-label="Main">
+      <a href="/"{{if eq .Nav "projects"}} aria-current="page"{{end}}>Projects</a>
+      <a href="/assessments"{{if eq .Nav "assessments"}} aria-current="page"{{end}}>Assessments</a>
+      <a href="/instance"{{if eq .Nav "instance"}} aria-current="page"{{end}}>Instance details</a>
+    </nav>
+  </div></header>
+{{end}}
+
+{{define "divergence"}}{{if .Known}}{{.Ahead}} ahead, {{.Behind}} behind <code>{{.Ref}}</code>{{else}}<span class="na">Unknown</span>{{if .Reason}} <span class="muted small">({{.Reason}}{{if .Ref}}: <code>{{.Ref}}</code>{{end}})</span>{{end}}{{end}}{{end}}

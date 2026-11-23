@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strings"
@@ -15,22 +14,21 @@ import (
 	"github.com/Ryttis/devatlas/internal/registry"
 )
 
-var projectTemplate = template.Must(template.New("project.html").Funcs(template.FuncMap{
-	"deref": func(b *bool) bool { return b != nil && *b },
-	"basis": func(b string) string {
-		switch b {
-		case "locked":
-			return "užrakinta (lock failas)"
-		case "image-tag":
-			return "deklaruota image žyma"
-		case "arg-default":
-			return "deklaruota image žyma (numatytoji ARG reikšmė)"
-		case "platform":
-			return "deklaruota Composer config.platform"
-		}
-		return "deklaruotas versijos apribojimas"
-	},
-}).ParseFS(templateFS, "templates/project.html"))
+var projectTemplate = page("project.html")
+
+func basisLabel(b string) string {
+	switch b {
+	case "locked":
+		return "užrakinta (lock failas)"
+	case "image-tag":
+		return "deklaruota image žyma"
+	case "arg-default":
+		return "deklaruota image žyma (numatytoji ARG reikšmė)"
+	case "platform":
+		return "deklaruota Composer config.platform"
+	}
+	return "deklaruotas versijos apribojimas"
+}
 
 // ScopeNote states what a status does and does not cover. It is shown
 // wherever statuses are shown.
@@ -314,7 +312,7 @@ func (s *Server) handleAssess(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		code := enqueueCode(s.assess.Enqueue(assess.Job{ProjectID: v.ID, CheckoutID: ck.ID, Path: ck.Path}))
-		target := "/"
+		target := returnTarget(r)
 		if r.PostForm.Get("return") == "project" {
 			target = "/projects/" + url.PathEscape(v.ID)
 		}
@@ -352,7 +350,16 @@ func (s *Server) handleAssessAll(w http.ResponseWriter, r *http.Request) {
 	case skipped > 0:
 		code = "partial"
 	}
-	http.Redirect(w, r, "/?msg="+code, http.StatusSeeOther)
+	http.Redirect(w, r, returnTarget(r)+"?msg="+code, http.StatusSeeOther)
+}
+
+// returnTarget is the page a POST redirects to: the assessments page when
+// the form asked for it, otherwise the dashboard as before.
+func returnTarget(r *http.Request) string {
+	if r.PostForm.Get("return") == "assessments" {
+		return "/assessments"
+	}
+	return "/"
 }
 
 func (s *Server) handleAssessmentAPI(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +393,7 @@ type findingView struct {
 }
 
 type projectData struct {
+	Nav         string
 	Project     ProjectDTO
 	Now         string
 	Scope       string
@@ -452,7 +460,7 @@ func (s *Server) handleProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := ObserveProjects(r.Context(), []registry.ProjectView{*view}, s.registry.Path(), now, s.git)
-	data := projectData{Project: resp.Projects[0], Now: fmtTime(now), Scope: ScopeNote, Enabled: s.assess != nil,
+	data := projectData{Nav: "projects", Project: resp.Projects[0], Now: fmtTime(now), Scope: ScopeNote, Enabled: s.assess != nil,
 		Flash: flashMessages[r.URL.Query().Get("msg")]}
 	data.Fresh = unverified("vertinimas šiame procese neįjungtas")
 	data.Sec = data.Fresh

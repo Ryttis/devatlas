@@ -195,9 +195,24 @@ func TestDashboardFlowTableRefreshResultCard(t *testing.T) {
 	d := newDash(t)
 
 	// 1. Table before any assessment: nothing is green.
-	code, home := d.get("/")
+	code, dashboard := d.get("/")
 	if code != http.StatusOK {
-		t.Fatalf("home status %d", code)
+		t.Fatalf("dashboard status %d", code)
+	}
+	mustContain(t, "dashboard before", dashboard, "Demo Project", "Empty Project", "Not checked", "Not configured", "⚪ Nepatikrinta", `href="/projects/demo"`, `href="/assessments"`)
+	if strings.Contains(dashboard, "🟢") || strings.Contains(dashboard, "🔴") {
+		t.Error("a project that was never assessed must not show an assessment status")
+	}
+	// /runs belongs to the agent execution console and is not served here.
+	if code, _ := d.get("/runs"); code != http.StatusNotFound {
+		t.Errorf("/runs must not be repurposed by this branch: %d", code)
+	}
+	if code, alias := d.get("/projects"); code != http.StatusOK || !strings.Contains(alias, "Demo Project") {
+		t.Errorf("/projects must serve the dashboard: %d", code)
+	}
+	code, home := d.get("/assessments")
+	if code != http.StatusOK {
+		t.Fatalf("assessments status %d", code)
 	}
 	mustContain(t, "home before", home, "Demo Project", "Empty Project", "Nepatikrinta", "dar nevertinta", "Atnaujinti visus",
 		`action="/projects/demo/assess"`, "Tai nėra visos sistemos saugumo auditas")
@@ -230,7 +245,12 @@ func TestDashboardFlowTableRefreshResultCard(t *testing.T) {
 	}
 
 	// 4. Table after the run.
-	_, home = d.get("/")
+	_, dashboard = d.get("/")
+	// Health stays "Not checked": an assessment is not a runtime check.
+	// Freshness and security appear separately with their existing labels.
+	mustContain(t, "dashboard after", dashboard, `data-label="Health"><span class="na">Not checked</span>`,
+		"🔴 Spręsti nedelsiant", "⚪ Nepatikrinta", "Dalinė patikra")
+	_, home = d.get("/assessments")
 	mustContain(t, "home after", home, "Spręsti nedelsiant", "Dalinė patikra", "PHP 8.4", canonB, "(1 iš 2 checkout)", "UTC", "test-model")
 	if strings.Contains(home, "<script>alert(1)") {
 		t.Error("project description is not escaped")
@@ -270,7 +290,10 @@ func TestDashboardFlowTableRefreshResultCard(t *testing.T) {
 		t.Errorf("a project without manifests must be unverified: %+v", empty)
 	}
 	d.waitResult("demo")
-	_, home = d.get("/")
+	if code, loc = d.post("/assess-all", url.Values{"return": {"assessments"}}, nil); code != http.StatusSeeOther || !strings.HasPrefix(loc, "/assessments?msg=") {
+		t.Errorf("POST assess-all from the assessments page: %d %q", code, loc)
+	}
+	_, home = d.get("/assessments")
 	mustContain(t, "home final", home, "manifestų")
 
 	// 8. The key and private data never appear in any response; private
@@ -307,7 +330,7 @@ func TestSourceFailureShowsAttemptButKeepsResult(t *testing.T) {
 	if rec.LastAttempt.OK || !rec.Result.SourcesCheckedAt.Equal(first.Result.SourcesCheckedAt) {
 		t.Fatalf("attempt %+v, result date %v vs %v", rec.LastAttempt, rec.Result.SourcesCheckedAt, first.Result.SourcesCheckedAt)
 	}
-	_, home := d.get("/")
+	_, home := d.get("/assessments")
 	mustContain(t, "home", home, "Paskutinis bandymas", "nepavyko", "Spręsti nedelsiant")
 	_, card := d.get("/projects/demo")
 	mustContain(t, "card", card, "Rodomas ankstesnis sėkmingas rezultatas", "(nesėkmingas)")
@@ -368,7 +391,9 @@ func TestDashboardWithoutAssessmentService(t *testing.T) {
 	}
 	base, stop := startTestServerWith(t, store)
 	defer stop()
-	_, home, _ := getBody(t, base+"/")
+	_, dashboard, _ := getBody(t, base+"/")
+	mustContain(t, "dashboard", dashboard, "Demo", "Not checked")
+	_, home, _ := getBody(t, base+"/assessments")
 	mustContain(t, "home", home, "Nepatikrinta", "neįjungtas")
 	if strings.Contains(home, "Atnaujinti visus") {
 		t.Error("refresh buttons shown without a service")

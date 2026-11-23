@@ -84,7 +84,7 @@ module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The
 - **Listen and Serve are separate steps.** `Listen` opens the socket and
   returns the real address (useful with port 0 and in tests); `Serve` runs
   until cancelled. This keeps the server testable without signals.
-- **Honest UI.** The home page renders `httpserver.CurrentScope`, a list of
+- **Honest UI.** The instance details page renders `httpserver.CurrentScope`, a list of
   implemented and deferred capabilities, so the UI never implies features
   that do not exist. Update it in every slice.
 - **Facts carry time.** `/health` already includes `checked_at`; every future
@@ -206,7 +206,7 @@ internal/store        SQLite index and observation history. Rebuildable from
                       documents.
 internal/collect      one adapter per source behind a small interface:
   collect/git         (exists) branch, HEAD, change counts, worktrees,
-                      sanitised remotes. Planned: ahead/behind from local
+                      sanitised remotes, ahead/behind from local
                       remote refs, labelled as such, never fetching.
   collect/docker      Compose project metadata, container state, health,
                       restart count, published host ports. Reports

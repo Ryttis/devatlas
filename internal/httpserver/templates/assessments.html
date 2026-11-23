@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assessments — DevAtlas</title>
+  {{template "style"}}
+  {{if .Refresh}}<meta http-equiv="refresh" content="4;url=/assessments">{{end}}
+</head>
+<body>
+  {{template "nav" .}}
+  <main lang="lt">
+    <h1>Projektų technologinė būklė</h1>
+    <p class="muted small">{{.ScopeNote}}</p>
+    {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+    {{if .RegistryError}}
+    <p class="warn">Registracijų failo nepavyko perskaityti; būklės lentelė nerodoma.</p>
+    {{else if not .Rows}}
+    <p>Projektų dar nėra. Užregistruokite: <code>devatlas add -project &lt;id&gt; -name "&lt;pavadinimas&gt;" &lt;katalogas&gt;</code>.</p>
+    {{else}}
+    {{if .Enabled}}
+    <p><form class="inline" method="post" action="/assess-all"><input type="hidden" name="return" value="assessments"><button type="submit">Atnaujinti visus</button></form>
+    <span class="muted small">Vertinimai vykdomi po vieną; rezultatai išsaugomi. {{if .AIModel}}DI paaiškinimų modelis: <code>{{.AIModel}}</code>.{{else}}DI adapteris nesukonfigūruotas: rodomi tik taisyklių radiniai.{{end}}</span></p>
+    {{else}}
+    <p class="warn">Vertinimas šiame procese neįjungtas.</p>
+    {{end}}
+    <div class="panel scroll">
+    <table>
+      <thead><tr><th>Projektas</th><th>Paskirtis</th><th>Technologijos ir versijos</th><th>Naujumas</th><th>Saugumas</th><th>Patikrinta</th><th></th></tr></thead>
+      <tbody>
+      {{range .Rows}}
+        <tr>
+          <td><a href="/projects/{{.ID}}">{{.Name}}</a><br><span class="muted small">{{.ID}}</span></td>
+          <td class="small">{{if .Description}}{{.Description}}{{else}}<span class="muted">&ndash;</span>{{end}}</td>
+          <td class="small">{{range .Tech}}{{.}}<br>{{else}}<span class="muted">&ndash;</span>{{end}}</td>
+          <td><span class="status {{.Fresh.Class}}">{{.Fresh.Icon}} {{.Fresh.Label}}</span>{{if .Fresh.Partial}}<span class="badge">Dalinė patikra</span>{{end}}<br><span class="muted small">{{.Fresh.Reason}}</span></td>
+          <td><span class="status {{.Sec.Class}}">{{.Sec.Icon}} {{.Sec.Label}}</span>{{if .Sec.Partial}}<span class="badge">Dalinė patikra</span>{{end}}<br><span class="muted small">{{.Sec.Reason}}</span></td>
+          <td class="small">{{if .CheckedAt}}{{.CheckedAt}}{{else}}<span class="muted">&ndash;</span>{{end}}
+            {{if .Stale}}<br><span class="stale">Pasenęs: {{range $i, $r := .Stale}}{{if $i}}; {{end}}{{$r}}{{end}}</span>{{end}}
+            {{if and .AttemptNote .CheckedAt}}<br><span class="stale">{{.AttemptNote}}</span>{{end}}
+            {{if .Checkout}}<br><span class="muted">{{.Checkout}}{{if gt .Checkouts 1}} (1 iš {{.Checkouts}} checkout)</span>{{else}}</span>{{end}}{{end}}</td>
+          <td>{{if .Job}}<em>{{.Job}}</em>{{else if $.Enabled}}<form class="inline" method="post" action="/projects/{{.ID}}/assess"><input type="hidden" name="return" value="assessments"><button type="submit">Atnaujinti</button></form>{{end}}</td>
+        </tr>
+      {{end}}
+      </tbody>
+    </table>
+    </div>
+    <p class="muted small">🟢 nurodyta apimtis patikrinta, žinomų problemų nenustatyta · 🟡 yra planine tvarka spręstinų problemų · 🔴 yra neatidėliotinai spręstina problema · ⚪ „Nepatikrinta“: patikra nepilna ir radinių nėra · „Dalinė patikra“: radinių yra, bet patikrinta ne visa apimtis. Spalvą nustato taisyklės; DI tik paaiškina radinius. Rodomas išsaugotas paskutinio sėkmingo vertinimo rezultatas.</p>
+    {{end}}
+  </main>
+</body>
+</html>

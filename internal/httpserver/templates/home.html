@@ -4,139 +4,80 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DevAtlas</title>
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }
-    body { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; }
-    h1 { margin-bottom: 0; }
-    .muted { opacity: 0.7; }
-    code { font-family: ui-monospace, monospace; }
-    section { margin-top: 1.5rem; }
-    ul { padding-left: 1.25rem; }
-    table { border-collapse: collapse; width: 100%; font-size: 0.95rem; }
-    th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.4); vertical-align: top; }
-    .warn { border: 1px solid #c60; padding: 0.5rem 0.75rem; border-radius: 4px; }
-    .small { font-size: 0.85rem; }
-    .status { white-space: nowrap; font-weight: 600; }
-    .badge { display: inline-block; font-size: 0.75rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.25rem; }
-    .stale { color: #b45309; }
-    .flash { border: 1px solid #2563eb; padding: 0.5rem 0.75rem; border-radius: 4px; }
-    form.inline { display: inline; margin: 0; }
-    button { font: inherit; padding: 0.15rem 0.6rem; cursor: pointer; }
-    .scroll { overflow-x: auto; }
-  </style>
-  {{if .Refresh}}<meta http-equiv="refresh" content="4;url=/">{{end}}
+  {{template "style"}}
 </head>
 <body>
-  <h1>DevAtlas</h1>
-  <p class="muted">Local project registry for a developer workstation.</p>
+  {{template "nav" .}}
+  <main>
+    <h1>Projects</h1>
+    <p class="muted">Registered projects on this workstation. Observed at {{.Now}}.</p>
+    {{if .Flash}}<p class="flash">{{.Flash}} <a href="/assessments">Assessments</a></p>{{end}}
 
-  <section>
-    <h2>Projektų technologinė būklė</h2>
-    <p class="muted small">{{.ScopeNote}}</p>
-    {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
     {{if .RegistryError}}
-    <p class="warn">Registracijų failo nepavyko perskaityti; būklės lentelė nerodoma.</p>
+    <p class="warn">The registration file could not be loaded and was left untouched: <code>{{.RegistryError}}</code>.
+      See <a href="/instance">Instance details</a> for its location.</p>
     {{else if not .Rows}}
-    <p>Projektų dar nėra. Užregistruokite: <code>devatlas add -project &lt;id&gt; -name "&lt;pavadinimas&gt;" &lt;katalogas&gt;</code>.</p>
-    {{else}}
-    {{if .Enabled}}
-    <form class="inline" method="post" action="/assess-all"><button type="submit">Atnaujinti visus</button></form>
-    <span class="muted small">Vertinimai vykdomi po vieną; rezultatai išsaugomi. {{if .AIModel}}DI paaiškinimų modelis: <code>{{.AIModel}}</code>.{{else}}DI adapteris nesukonfigūruotas: rodomi tik taisyklių radiniai.{{end}}</span>
-    {{else}}
-    <p class="warn">Vertinimas šiame procese neįjungtas.</p>
-    {{end}}
-    <div class="scroll">
-    <table>
-      <thead><tr><th>Projektas</th><th>Paskirtis</th><th>Technologijos ir versijos</th><th>Naujumas</th><th>Saugumas</th><th>Patikrinta</th><th></th></tr></thead>
-      <tbody>
-      {{range .Rows}}
-        <tr>
-          <td><a href="/projects/{{.ID}}">{{.Name}}</a><br><span class="muted small">{{.ID}}</span></td>
-          <td class="small">{{if .Description}}{{.Description}}{{else}}<span class="muted">&ndash;</span>{{end}}</td>
-          <td class="small">{{range .Tech}}{{.}}<br>{{else}}<span class="muted">&ndash;</span>{{end}}</td>
-          <td><span class="status {{.Fresh.Class}}">{{.Fresh.Icon}} {{.Fresh.Label}}</span>{{if .Fresh.Partial}}<span class="badge">Dalinė patikra</span>{{end}}<br><span class="muted small">{{.Fresh.Reason}}</span></td>
-          <td><span class="status {{.Sec.Class}}">{{.Sec.Icon}} {{.Sec.Label}}</span>{{if .Sec.Partial}}<span class="badge">Dalinė patikra</span>{{end}}<br><span class="muted small">{{.Sec.Reason}}</span></td>
-          <td class="small">{{if .CheckedAt}}{{.CheckedAt}}{{else}}<span class="muted">&ndash;</span>{{end}}
-            {{if .Stale}}<br><span class="stale">Pasenęs: {{range $i, $r := .Stale}}{{if $i}}; {{end}}{{$r}}{{end}}</span>{{end}}
-            {{if and .AttemptNote .CheckedAt}}<br><span class="stale">{{.AttemptNote}}</span>{{end}}
-            {{if .Checkout}}<br><span class="muted">{{.Checkout}}{{if gt .Checkouts 1}} (1 iš {{.Checkouts}} checkout)</span>{{else}}</span>{{end}}{{end}}</td>
-          <td>{{if .Job}}<em>{{.Job}}</em>{{else if $.Enabled}}<form class="inline" method="post" action="/projects/{{.ID}}/assess"><button type="submit">Atnaujinti</button></form>{{end}}</td>
-        </tr>
-      {{end}}
-      </tbody>
-    </table>
+    <div class="panel">
+      <h2>No projects registered yet</h2>
+      <p>DevAtlas shows only projects you register explicitly. Register an existing directory as the first checkout of a project from a terminal:</p>
+      <pre class="cmd"><code>devatlas add -project my-project -name "My Project" /path/to/checkout</code></pre>
+      <ul>
+        <li><code>-project</code> is a stable ID you choose: lowercase letters, digits, and hyphens.</li>
+        <li><code>-name</code> is the display name; it is required only for a new project.</li>
+        <li>Run the command again with the same <code>-project</code> to add more checkouts or worktrees.</li>
+      </ul>
+      <p class="muted small">Registration only writes the DevAtlas registry file; the directory is never modified. Reload this page afterwards. <code>devatlas list</code> shows the same registrations in the terminal.</p>
     </div>
-    <p class="muted small">🟢 nurodyta apimtis patikrinta, žinomų problemų nenustatyta · 🟡 yra planine tvarka spręstinų problemų · 🔴 yra neatidėliotinai spręstina problema · ⚪ „Nepatikrinta“: patikra nepilna ir radinių nėra · „Dalinė patikra“: radinių yra, bet patikrinta ne visa apimtis. Spalvą nustato taisyklės; DI tik paaiškina radinius. Rodomas išsaugotas paskutinio sėkmingo vertinimo rezultatas.</p>
-    {{end}}
-  </section>
-
-  <section>
-    <h2>This instance</h2>
-    <ul>
-      <li>Version: <code>{{.Version.Version}}</code> (commit <code>{{.Version.Commit}}</code>{{if .Version.Modified}}, dirty{{end}})</li>
-      <li>Runtime: <code>{{.Version.GoVersion}}</code> on <code>{{.Version.OS}}/{{.Version.Arch}}</code></li>
-      <li>Bound to loopback address <code>{{.BindAddr}}</code></li>
-      <li>Health endpoint: <a href="/health"><code>GET /health</code></a></li>
-      <li>Page rendered at <code>{{.Now.Format "2006-01-02T15:04:05Z07:00"}}</code></li>
-    </ul>
-  </section>
-
-  <section>
-    <h2>Registered projects</h2>
-    <p class="muted">Source: <code>{{.RegistryFile}}</code>, read at <code>{{.Now.Format "2006-01-02T15:04:05Z07:00"}}</code>.
-      Git columns were collected for this page view by running <code>git</code> locally; nothing is cached.
-      Runtime status has not been collected: Docker, ports, and application checks are not implemented, so every checkout is <code>unknown</code> regardless of its Git state.</p>
-    {{if .RegistryError}}
-    <p class="warn">The registration file could not be loaded and was left untouched: <code>{{.RegistryError}}</code></p>
-    {{else if not .Registrations.Projects}}
-    <p>No projects registered yet. Register one with <code>devatlas add -project &lt;id&gt; -name "&lt;name&gt;" &lt;directory&gt;</code>.</p>
     {{else}}
-    <table>
-      <thead><tr><th>Project</th><th>Checkout ID</th><th>Path</th><th>Directory</th><th>Git</th><th>Branch</th><th>Commit</th><th>Changes</th><th>Remotes</th><th>Runtime</th></tr></thead>
-      <tbody>
-      {{range .Registrations.Projects}}{{$p := .}}
-        {{range .Checkouts}}
-        <tr>
-          <td>{{$p.Name}} <span class="muted">({{$p.ID}})</span></td>
-          <td><code>{{.ID}}</code></td>
-          <td><code>{{.Path}}</code></td>
-          <td>{{.PathStatus}}</td>
-          {{with .Git}}
-          <td>{{.Status}}{{if .Reason}}<br><span class="muted small">{{.Reason}}</span>{{end}}<br><span class="muted small">at {{.CollectedAt.Format "15:04:05Z07:00"}}</span></td>
-          {{with .Repository}}
-          <td>{{if .Head.Detached}}<em>detached</em>{{else}}{{.Head.Branch}}{{end}}{{if .Head.Unborn}} <span class="muted small">(no commits)</span>{{end}}{{if .LinkedWorktree}}<br><span class="muted small">linked worktree</span>{{end}}{{if not .PathIsWorktreeRoot}}<br><span class="muted small">subdirectory of {{.WorktreeRoot}}</span>{{end}}</td>
-          <td><code>{{if .Head.Commit}}{{slice .Head.Commit 0 12}}{{else}}&ndash;{{end}}</code></td>
-          <td>{{with .Changes}}{{if and (eq .Tracked 0) (eq .Untracked 0)}}clean{{else}}{{.Tracked}} tracked ({{.Staged}} staged, {{.Unstaged}} unstaged{{if .Conflicted}}, {{.Conflicted}} conflicted{{end}}), {{.Untracked}} untracked{{end}}{{end}}</td>
-          <td class="small">{{range .Remotes}}{{.Name}} ({{.Role}}): {{if .Host}}{{.Host}}{{else}}local{{end}} <span class="muted">[{{.Provider}}]</span><br>{{else}}<span class="muted">none</span>{{end}}</td>
+    <div class="panel tablepanel scroll">
+      <table class="projects">
+        <thead><tr><th>Project</th><th>Domain</th><th>Health</th><th>Freshness</th><th>Security</th><th>Git</th><th>Runs from</th><th>Open</th></tr></thead>
+        {{range .Rows}}{{$row := .}}{{$n := len .Checkouts}}
+        <tbody>
+          {{range $i, $c := .Checkouts}}
+          <tr>
+            {{if eq $i 0}}
+            <td rowspan="{{$n}}" data-label="Project"><a class="name" href="/projects/{{$row.ID}}">{{$row.Name}}</a><br><span class="muted small">{{$row.ID}}</span></td>
+            <td rowspan="{{$n}}" data-label="Domain"><span class="na">Not configured</span></td>
+            <td rowspan="{{$n}}" data-label="Health"><span class="na">Not checked</span></td>
+            <td rowspan="{{$n}}" data-label="Freshness" lang="lt"><span class="status assess {{$row.Fresh.Class}}">{{$row.Fresh.Icon}} {{$row.Fresh.Label}}</span>{{if $row.Fresh.Partial}}<br><span class="badge">Dalinė patikra</span>{{end}}</td>
+            <td rowspan="{{$n}}" data-label="Security" lang="lt"><span class="status assess {{$row.Sec.Class}}">{{$row.Sec.Icon}} {{$row.Sec.Label}}</span>{{if $row.Sec.Partial}}<br><span class="badge">Dalinė patikra</span>{{end}}{{if $row.Stale}}<br><span class="stale small" lang="en">assessment is stale</span>{{end}}{{if $row.Job}}<br><span class="muted small">{{$row.Job}}</span>{{end}}</td>
+            {{end}}
+            <td class="git" data-label="Git">
+              {{if $c.Git.Repository}}{{with $c.Git.Repository}}
+              {{if .Head.Detached}}<span>detached at <code>{{short .Head.Commit}}</code></span>{{else}}<code>{{.Head.Branch}}</code>{{end}}
+              {{if uncommitted .Changes}}<span class="chip dirty">{{uncommitted .Changes}} uncommitted</span>{{else}}<span class="chip ok">clean</span>{{end}}
+              <br><span class="small">{{with .Tracking.Default}}{{if .Known}}{{.Ahead}} ahead, {{.Behind}} behind <code>{{.Ref}}</code>{{else}}<span class="muted">vs default branch:</span> <span class="na">Unknown</span>{{end}}{{end}}</span>
+              {{end}}{{else}}<span class="na">{{gitProblem $c.Git}}</span>{{end}}
+            </td>
+            <td data-label="Runs from"><code>{{$c.Path}}</code>{{if ne $c.PathStatus "present"}}<br><span class="stale small">directory {{$c.PathStatus}}</span>{{end}}</td>
+            {{if eq $i 0}}<td rowspan="{{$n}}" class="open"><a class="btn primary" href="/projects/{{$row.ID}}">Open</a></td>{{end}}
+          </tr>
           {{else}}
-          <td colspan="4" class="muted">&ndash;</td>
+          <tr>
+            <td data-label="Project"><a class="name" href="/projects/{{.ID}}">{{.Name}}</a><br><span class="muted small">{{.ID}}</span></td>
+            <td data-label="Domain"><span class="na">Not configured</span></td>
+            <td data-label="Health"><span class="na">Not checked</span></td>
+            <td data-label="Freshness" lang="lt">{{.Fresh.Icon}} {{.Fresh.Label}}</td>
+            <td data-label="Security" lang="lt">{{.Sec.Icon}} {{.Sec.Label}}</td>
+            <td data-label="Git"><span class="na">Not checked</span></td>
+            <td data-label="Runs from"><span class="na">Not configured</span></td>
+            <td class="open"><a class="btn primary" href="/projects/{{.ID}}">Open</a></td>
+          </tr>
           {{end}}
-          {{end}}
-          <td>{{.Runtime.Status}}</td>
-        </tr>
+        </tbody>
         {{end}}
-      {{end}}
-      </tbody>
-    </table>
-    <p class="muted">JSON: <a href="/api/projects"><code>GET /api/projects</code></a>. "Directory" is a stat of the path at page render time.
-      "Changes" counts tracked paths with staged, unstaged, or unmerged changes and untracked files, as reported by <code>git status --porcelain=v2 --untracked-files=all</code>.
-      Remote URLs are shown as host and provider only; credentials are removed before anything is displayed or logged. "Runtime" is always <code>unknown</code> in this build.</p>
+      </table>
+    </div>
+    <p class="muted small">
+      <strong>Git:</strong> branch and uncommitted changes were read for this page view by running <code>git</code> locally (read-only).
+      Ahead/behind compares with the remote default branch and is <strong>Based on last fetched refs</strong>: DevAtlas never fetches, pulls, or contacts a remote.<br>
+      <strong>Health</strong> means runtime and application availability; those checks (containers, ports, HTTP) are not implemented in this build, so it is always "Not checked".<br>
+      <strong>Freshness</strong> and <strong>Security</strong> are the stored technology assessment (support status of declared technologies and known vulnerabilities of locked dependencies), with the labels used on the <a href="/assessments">Assessments</a> page, where an assessment is started or refreshed. They say nothing about whether the application is running.<br>
+      <strong>Domain:</strong> the registry has no domain or application address setting yet.
+      <strong>Runs from:</strong> the registered checkout directory.
+    </p>
     {{end}}
-  </section>
-
-  <section>
-    <h2>Implementation scope: slice {{.Scope.Slice}}</h2>
-    <h3>Implemented</h3>
-    <ul>
-      {{range .Scope.Implemented}}<li>{{.}}</li>
-      {{end}}
-    </ul>
-    <h3>Not yet implemented</h3>
-    <p class="muted">Nothing below is available in this build.</p>
-    <ul>
-      {{range .Scope.Deferred}}<li>{{.}}</li>
-      {{end}}
-    </ul>
-  </section>
+  </main>
 </body>
 </html>

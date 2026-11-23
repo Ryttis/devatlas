@@ -15,7 +15,8 @@ files, Dockerfiles and Compose files, checked against OSV, endoflife.date,
 the npm registry and Packagist, optionally explained by an AI model through
 one OpenAI-compatible adapter. See "Technology status dashboard" below. It
 does not yet read `project-registry.yaml`, scan directories, talk to Docker,
-analyse ports, run HTTP checks, show ahead/behind counts, or export context;
+analyse ports, run HTTP checks, fetch from remotes, or export context
+(ahead/behind counts come from already fetched refs only);
 every checkout's runtime status is reported as `unknown` with the reason
 "not collected" regardless of its Git state. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -277,11 +278,13 @@ conflicts on your machine.
 
 | Method and path | Response                                                  |
 | --------------- | --------------------------------------------------------- |
-| `GET /`         | HTML home page: technology status table, registered checkouts with Git columns, build info, implementation scope |
-| `GET /projects/{id}` | HTML project card: statuses, assessed checkout, findings with evidence, sources and actions, technologies, dependencies, Git |
+| `GET /`, `GET /projects` | HTML project dashboard: one row per project with Domain, Health (always "Not checked": runtime checks are not implemented), the stored freshness and security assessments, Git, Runs from, and a link to the project page; explains registration when the registry is empty |
+| `GET /projects/{id}` | HTML project page: overview, every checkout with its Git state (branch, commit, default branch, uncommitted counts, ahead/behind, last fetch, remotes), then the assessment: statuses, assessed checkout, findings with evidence, sources and actions, technologies, dependencies |
+| `GET /assessments` | HTML technology assessments: the status table with the "Atnaujinti" controls. `/runs` is deliberately not used: it belongs to the agent execution console, which is not part of this branch |
+| `GET /instance` | HTML instance details: build version, runtime, bind address, registry path and status, implementation scope |
 | `GET /api/projects/{id}/assessment` | JSON: the stored assessment record (last successful result and last attempt); 404 before the first run |
-| `POST /projects/{id}/assess` | Queues an assessment of one checkout (form field `checkout`, optional); answers 303 |
-| `POST /assess-all` | Queues an assessment of every project; answers 303 |
+| `POST /projects/{id}/assess` | Queues an assessment of one checkout (form field `checkout`, optional); answers 303 to `/`, or to the page named by the form field `return` (`project`, `assessments`) |
+| `POST /assess-all` | Queues an assessment of every project; answers 303 to `/`, or to `/assessments` with `return=assessments` |
 | `GET /health`   | JSON: `status`, `service`, `version`, `commit`, `modified`, `checked_at`, `uptime_seconds` |
 | `GET /api/projects` | JSON: `schema_version`, `generated_at`, `registry_file`, `collection`, `runtime_status`, and `projects[]` with `checkouts[]`, each carrying a `git` observation |
 
@@ -305,7 +308,7 @@ cached, stored, or refreshed in the background. `runtime` is always
 port, or HTTP collection exists in this build, and a successful Git
 observation says nothing about containers or application health. If the
 registration file becomes malformed or unreadable, both registry endpoints
-return 500; the home page shows an error instead of a table. Responses and
+return 500; the dashboard shows an error instead of a table. Responses and
 server logs omit YAML values and parser excerpts. Fixing the file restores
 responses without a restart. `/health` reports process health and does not
 validate registrations.
@@ -317,9 +320,10 @@ commands.
 
 ## Git observations
 
-For each registered checkout, `list`, `/api/projects`, and the home page run
-three read-only commands in the checkout directory and report the result as
-one observation:
+For each registered checkout, `list`, `/api/projects`, the dashboard, and the
+project page run read-only commands in the checkout directory (three, plus up
+to three more for the comparisons described under "Ahead and behind") and
+report the result as one observation:
 
 ```json
 "git": {
@@ -340,6 +344,38 @@ one observation:
   }
 }
 ```
+
+**Ahead and behind.** `repository.tracking` compares `HEAD` with
+remote-tracking refs that already exist locally. DevAtlas never fetches,
+pulls, merges, or checks out, so every value is **based on last fetched
+refs** (`"basis": "last_fetched_refs"`) and is only as current as the last
+`git fetch` somebody ran:
+
+```json
+"tracking": {
+  "basis": "last_fetched_refs",
+  "upstream": { "ref": "origin/feature", "known": true, "ahead": 2, "behind": 0 },
+  "default_branch": { "remote": "origin", "branch": "main", "ref": "origin/main", "source": "remote_head" },
+  "default": { "ref": "origin/main", "known": true, "ahead": 5, "behind": 3 },
+  "fetch_head_updated_at": "2026-11-10T10:09:21Z"
+}
+```
+
+- `upstream` is the upstream of the current branch, from `git status
+  --branch`. `default` compares with the remote default branch using
+  `git rev-list --left-right --count`.
+- The default branch is `refs/remotes/<remote>/HEAD` (`source:
+  "remote_head"`); when that is not set locally, `<remote>/main` or
+  `<remote>/master` if present (`source: "conventional_name"`). The remote is
+  `origin`, or the only configured remote.
+- When a value cannot be established (`known: false`: no upstream, detached
+  HEAD, no remote, refs not present) the UI shows "Unknown" and `reason` says
+  why. A failed comparison never fails the observation.
+- `fetch_head_updated_at` is the modification time of a non-empty
+  `FETCH_HEAD`, the file Git writes during a fetch or pull, shown as
+  "FETCH_HEAD last updated". A file time cannot establish that the fetch
+  succeeded. It is absent when the repository has no such file (for example
+  a clone that never fetched).
 
 **Statuses.** Exactly one applies, and `reason` explains every non-`ok` one
 in words that never include command output, remote URLs, or credentials:
@@ -422,12 +458,16 @@ failure never affects another's observation.
 
 ## Technology status dashboard
 
-The home page shows one row per project: purpose, technologies and versions,
-freshness, security, the time of the check, and an "Atnaujinti" button; the
-"Atnaujinti visus" button queues every project. The project card
-(`/projects/{id}`) shows the assessed checkout, every finding with its
-evidence, sources and recommended action, technologies, direct and transitive
-dependencies, and Git state. The dashboard UI is in Lithuanian.
+The assessments page (`/assessments`) shows one row per project: purpose,
+technologies and versions, freshness, security, the time of the check, and an
+"Atnaujinti" button; the "Atnaujinti visus" button queues every project. The
+project page (`/projects/{id}`) shows the assessed checkout, every finding
+with its evidence, sources and recommended action, technologies, and direct
+and transitive dependencies. The assessment UI is in Lithuanian; the project
+dashboard (`/`), the Git sections, and the instance page are in English. The
+dashboard shows the stored freshness and security statuses in their own
+columns with the same labels; its Health column is reserved for runtime and
+application availability and reads "Not checked" until such checks exist.
 
 **Scope.** A status covers the support status of declared technologies and
 known vulnerabilities of locked dependencies. It is not a security audit of

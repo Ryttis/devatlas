@@ -187,9 +187,24 @@ func TestHomePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"<title>DevAtlas</title>", "Implementation scope", "Not yet implemented", "/health", "127.0.0.1"} {
+	for _, want := range []string{"<title>DevAtlas</title>", `href="/assessments"`, `href="/instance"`, "No projects registered yet", "devatlas add -project"} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("home page missing %q", want)
+		}
+	}
+	// Build, runtime, registry, and scope notes live on their own page.
+	for _, moved := range []string{"Implementation scope", "Not yet implemented"} {
+		if strings.Contains(string(body), moved) {
+			t.Errorf("home page still shows %q", moved)
+		}
+	}
+	code, inst, _ := getBody(t, base+"/instance")
+	if code != http.StatusOK {
+		t.Fatalf("instance status = %d", code)
+	}
+	for _, want := range []string{"Instance details", "Implementation scope", "Not yet implemented", "/health", "127.0.0.1", "registrations.yaml", "Runtime", "0 project(s)"} {
+		if !strings.Contains(inst, want) {
+			t.Errorf("instance page missing %q", want)
 		}
 	}
 

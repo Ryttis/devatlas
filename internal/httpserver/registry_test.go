@@ -110,9 +110,18 @@ func TestProjectsAPIAndHomeReflectRegistrationsWithoutRestart(t *testing.T) {
 	if strings.Contains(html, "<script>alert") {
 		t.Fatalf("project name was not HTML-escaped:\n%s", html)
 	}
-	for _, want := range []string{"&lt;script&gt;alert", "(evil)", ck.ID, "present", "unknown", "Runtime status has not been collected"} {
+	for _, want := range []string{"&lt;script&gt;alert", `href="/projects/evil"`, ck.Path, "Not configured", "Not checked", "Not a Git repository"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("home page missing %q", want)
+		}
+	}
+	code, html, _ = getBody(t, base+"/projects/evil")
+	if code != http.StatusOK || strings.Contains(html, "<script>alert") {
+		t.Fatalf("project page status %d or unescaped name", code)
+	}
+	for _, want := range []string{"&lt;script&gt;alert", ck.ID, ck.Path, "present", "Not configured", "Not checked"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("project page missing %q", want)
 		}
 	}
 
@@ -263,9 +272,15 @@ func TestDirectoryObservationPreservesRegistrations(t *testing.T) {
 			t.Fatalf("incorrect existence: %+v", c)
 		}
 		html := httptest.NewRecorder()
-		handler.ServeHTTP(html, httptest.NewRequest(http.MethodGet, "/", nil))
-		if html.Code != 200 || !strings.Contains(html.Body.String(), "<td>"+state+"</td>") {
+		handler.ServeHTTP(html, httptest.NewRequest(http.MethodGet, "/projects/p", nil))
+		if html.Code != 200 || !strings.Contains(html.Body.String(), "<dt>Directory</dt><dd>"+state+"</dd>") {
 			t.Fatalf("HTML disagrees: %s", html.Body.String())
+		}
+		// The dashboard flags a registered directory that is not usable.
+		home := httptest.NewRecorder()
+		handler.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
+		if home.Code != 200 || strings.Contains(home.Body.String(), "directory "+state) == (state == "present") {
+			t.Fatalf("dashboard disagrees for %q: %s", state, home.Body.String())
 		}
 	}
 }

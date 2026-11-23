@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Instance details — DevAtlas</title>
+  {{template "style"}}
+</head>
+<body>
+  {{template "nav" .}}
+  <main>
+    <h1>Instance details</h1>
+    <p class="muted">This DevAtlas process: build, runtime, registry, and what this build does and does not do.</p>
+
+    <section>
+      <h2>Build and runtime</h2>
+      <div class="panel"><dl class="facts">
+        <dt>Version</dt><dd><code>{{.Version.Version}}</code></dd>
+        <dt>Commit</dt><dd><code>{{.Version.Commit}}</code>{{if .Version.Modified}} <span class="chip dirty">built from a modified tree</span>{{end}}</dd>
+        <dt>Runtime</dt><dd><code>{{.Version.GoVersion}}</code> on <code>{{.Version.OS}}/{{.Version.Arch}}</code></dd>
+        <dt>Listening on</dt><dd><code>{{.BindAddr}}</code> (loopback only)</dd>
+        <dt>Started</dt><dd>{{if .Started}}{{.Started}}{{else}}<span class="na">Unknown</span>{{end}}</dd>
+        <dt>Page rendered</dt><dd>{{.Now}}</dd>
+        <dt>Health endpoint</dt><dd><a href="/health"><code>GET /health</code></a></dd>
+      </dl></div>
+    </section>
+
+    <section>
+      <h2>Registry</h2>
+      <div class="panel"><dl class="facts">
+        <dt>Registry file</dt><dd><code>{{.RegistryFile}}</code></dd>
+        <dt>Status</dt><dd>{{if .RegistryError}}<span class="chip red">not loaded</span> <code>{{.RegistryError}}</code>{{else}}<span class="chip ok">loaded</span> {{.Projects}} project(s), {{.Checkouts}} checkout(s); re-read on every request{{end}}</dd>
+        <dt>JSON API</dt><dd><a href="/api/projects"><code>GET /api/projects</code></a> (runs <code>git</code> for every checkout)</dd>
+        <dt>Assessments</dt><dd>{{if .Assessment}}enabled; {{if .AIModel}}AI explanations use model <code>{{.AIModel}}</code>{{else}}AI adapter not configured, rule findings only{{end}}{{else}}<span class="na">Not configured</span> in this process{{end}} &middot; <a href="/assessments">open</a></dd>
+      </dl></div>
+    </section>
+
+    <section>
+      <h2>Implementation scope: slice {{.Scope.Slice}}</h2>
+      <div class="panel">
+        <h3>Implemented</h3>
+        <ul>
+          {{range .Scope.Implemented}}<li>{{.}}</li>
+          {{end}}
+        </ul>
+        <h3>Not yet implemented</h3>
+        <p class="muted">Nothing below is available in this build.</p>
+        <ul>
+          {{range .Scope.Deferred}}<li>{{.}}</li>
+          {{end}}
+        </ul>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

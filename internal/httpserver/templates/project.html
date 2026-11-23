@@ -1,43 +1,65 @@
 <!doctype html>
-<html lang="lt">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{.Project.Name}} — DevAtlas</title>
-  <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }
-    body { max-width: 72rem; margin: 2rem auto; padding: 0 1rem; }
-    h1 { margin-bottom: 0; }
-    .muted { opacity: 0.7; }
-    code { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
-    section { margin-top: 1.5rem; }
-    table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
-    th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid rgba(128,128,128,0.4); vertical-align: top; }
-    .warn { border: 1px solid #c60; padding: 0.5rem 0.75rem; border-radius: 4px; }
-    .flash { border: 1px solid #2563eb; padding: 0.5rem 0.75rem; border-radius: 4px; }
-    .small { font-size: 0.85rem; }
-    .status { font-weight: 600; }
-    .badge { display: inline-block; font-size: 0.75rem; border: 1px solid currentColor; border-radius: 3px; padding: 0 0.3rem; margin-left: 0.25rem; }
-    .stale { color: #b45309; }
-    .finding { border: 1px solid rgba(128,128,128,0.4); border-radius: 4px; padding: 0.5rem 0.75rem; margin: 0.6rem 0; }
-    .finding h4 { margin: 0 0 0.3rem 0; }
-    .finding dl { margin: 0.3rem 0; display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.75rem; font-size: 0.9rem; }
-    .finding dt { opacity: 0.7; }
-    .finding dd { margin: 0; overflow-wrap: anywhere; }
-    .ai { border-left: 3px solid #7c3aed; padding-left: 0.6rem; margin-top: 0.4rem; font-size: 0.92rem; }
-    .scroll { overflow-x: auto; }
-    button, select { font: inherit; }
-    button { padding: 0.15rem 0.6rem; cursor: pointer; }
-    summary { cursor: pointer; }
-  </style>
+  {{template "style"}}
   {{if .Refresh}}<meta http-equiv="refresh" content="4;url=/projects/{{.Project.ID}}">{{end}}
 </head>
 <body>
-  <p class="small"><a href="/">&larr; Visi projektai</a></p>
+  {{template "nav" .}}
+  <main>
+  <p class="small"><a href="/">&larr; All projects</a></p>
   <h1>{{.Project.Name}}</h1>
-  <p class="muted">{{.Project.ID}}{{with .Result}}{{if .Description}} · {{.Description}}{{end}}{{end}}</p>
-  <p class="muted small">{{.Scope}}</p>
+  <p class="muted"><code>{{.Project.ID}}</code>{{with .Result}}{{if .Description}} · {{.Description}}{{end}}{{end}}</p>
   {{if .Flash}}<p class="flash">{{.Flash}}</p>{{end}}
+
+  <section>
+    <h2>Overview</h2>
+    <div class="panel"><dl class="facts">
+      <dt>Project ID</dt><dd><code>{{.Project.ID}}</code></dd>
+      <dt>Name</dt><dd>{{.Project.Name}}</dd>
+      <dt>Registered</dt><dd>{{ts .Project.RegisteredAt}}</dd>
+      <dt>Checkouts</dt><dd>{{len .Project.Checkouts}}</dd>
+      <dt>Domain</dt><dd><span class="na">Not configured</span> <span class="muted small">(the registry has no domain or application address setting)</span></dd>
+      <dt>Health</dt><dd><span class="na">Not checked</span> <span class="muted small">(runtime and application availability checks are not implemented in this build)</span></dd>
+      <dt>Dependency freshness</dt><dd lang="lt"><span class="status">{{.Fresh.Icon}} {{.Fresh.Label}}</span>{{if .Fresh.Partial}}<span class="badge">Dalinė patikra</span>{{end}}</dd>
+      <dt>Security assessment</dt><dd lang="lt"><span class="status">{{.Sec.Icon}} {{.Sec.Label}}</span>{{if .Sec.Partial}}<span class="badge">Dalinė patikra</span>{{end}} <span class="muted small" lang="en">&middot; <a href="#assessment">details</a>{{if .CheckedAt}}, assessed {{.CheckedAt}}{{end}}</span></dd>
+    </dl></div>
+  </section>
+
+  <section>
+    <h2>Checkouts and Git</h2>
+    <p class="muted small">Observed now ({{.Now}}) by running <code>git</code> locally, read-only. Comparisons with remote branches are
+      <strong>Based on last fetched refs</strong>: DevAtlas never fetches, pulls, merges, checks out, or modifies project files, so they are only as current as the last fetch.</p>
+    {{range .Project.Checkouts}}
+    <div class="panel">
+      <dl class="facts">
+        <dt>Runs from</dt><dd><code>{{.Path}}</code></dd>
+        <dt>Checkout ID</dt><dd><code>{{.ID}}</code> <span class="muted small">registered {{ts .RegisteredAt}}</span></dd>
+        <dt>Directory</dt><dd>{{.PathStatus}}</dd>
+        {{if .Git.Repository}}{{with .Git.Repository}}
+        <dt>Current branch</dt><dd>{{if .Head.Detached}}<em>detached HEAD</em>{{else}}<code>{{.Head.Branch}}</code>{{end}}{{if .Head.Unborn}} <span class="muted small">(no commits yet)</span>{{end}}{{if .LinkedWorktree}} <span class="chip">linked worktree</span>{{end}}{{if not .PathIsWorktreeRoot}} <span class="muted small">subdirectory of <code>{{.WorktreeRoot}}</code></span>{{end}}</dd>
+        <dt>Commit</dt><dd>{{if .Head.Commit}}<code title="{{.Head.Commit}}">{{short .Head.Commit}}</code>{{else}}<span class="na">Unknown</span>{{end}}</dd>
+        <dt>Default branch</dt><dd>{{with .Tracking.DefaultBranch}}<code>{{.Ref}}</code> <span class="muted small">{{if eq .Source "remote_head"}}(from <code>{{.Remote}}/HEAD</code>){{else}}(assumed from the branch name; <code>{{.Remote}}/HEAD</code> is not set locally){{end}}</span>{{else}}<span class="na">Unknown</span>{{if .Tracking.Default.Reason}} <span class="muted small">({{.Tracking.Default.Reason}})</span>{{end}}{{end}}</dd>
+        <dt>Uncommitted changes</dt><dd>{{with .Changes}}{{if uncommitted .}}<span class="chip dirty">{{uncommitted .}} uncommitted</span> {{.Staged}} staged, {{.Unstaged}} unstaged, {{.Conflicted}} conflicted, {{.Untracked}} untracked <span class="muted small">({{.Tracked}} tracked path(s) changed)</span>{{else}}<span class="chip ok">clean</span> 0 staged, 0 unstaged, 0 untracked{{end}}{{end}}</dd>
+        <dt>vs upstream</dt><dd>{{template "divergence" .Tracking.Upstream}}</dd>
+        <dt>vs default branch</dt><dd>{{template "divergence" .Tracking.Default}}</dd>
+        <dt>FETCH_HEAD last updated</dt><dd>{{if .Tracking.FetchHeadUpdatedAt}}{{ts .Tracking.FetchHeadUpdatedAt}} <span class="muted small">(file modification time; it does not establish that the fetch succeeded)</span>{{else}}<span class="na">Unknown</span> <span class="muted small">(no non-empty <code>FETCH_HEAD</code> in this repository)</span>{{end}}</dd>
+        <dt>Remotes</dt><dd>{{range .Remotes}}{{.Name}} ({{.Role}}): {{if .Host}}{{.Host}}{{else}}local{{end}} <span class="muted">[{{.Provider}}]</span><br>{{else}}<span class="na">Not configured</span>{{end}}</dd>
+        {{end}}{{else}}
+        <dt>Git</dt><dd><span class="na">{{gitProblem .Git}}</span> <span class="muted small">(status <code>{{.Git.Status}}</code>)</span></dd>
+        {{end}}
+        <dt>Runtime</dt><dd><span class="na">Not checked</span></dd>
+      </dl>
+    </div>
+    {{else}}<p class="muted">No checkouts registered.</p>{{end}}
+    <p class="muted small">Uncommitted counts come from <code>git status --porcelain=v2 --untracked-files=all</code>. Remote URLs are shown as host and provider only; credentials are removed before anything is displayed or logged. JSON: <a href="/api/projects"><code>GET /api/projects</code></a>.</p>
+  </section>
+
+  <div id="assessment" lang="lt">
+  <p class="muted small" style="margin-top:1.75rem">{{.Scope}}</p>
   {{if .RecordError}}<p class="warn">{{.RecordError}}</p>{{end}}
 
   <section>
@@ -176,28 +198,8 @@
   </section>
   {{end}}
 
-  <section>
-    <h2>Git</h2>
-    <p class="muted small">Stebėta dabar ({{.Now}}), vykdant <code>git</code> vietoje; tik skaitymas.</p>
-    <div class="scroll"><table>
-      <thead><tr><th>Checkout</th><th>Kelias</th><th>Git</th><th>Šaka</th><th>Commit</th><th>Pakeitimai</th><th>Remotes</th></tr></thead>
-      <tbody>
-      {{range .Project.Checkouts}}
-        <tr><td><code>{{.ID}}</code></td><td><code>{{.Path}}</code><br><span class="muted small">{{.PathStatus}}</span></td>
-          {{with .Git}}
-          <td>{{.Status}}{{if .Reason}}<br><span class="muted small">{{.Reason}}</span>{{end}}</td>
-          {{with .Repository}}
-          <td>{{if .Head.Detached}}<em>detached</em>{{else}}{{.Head.Branch}}{{end}}{{if .LinkedWorktree}}<br><span class="muted small">linked worktree</span>{{end}}</td>
-          <td><code>{{if .Head.Commit}}{{slice .Head.Commit 0 12}}{{else}}&ndash;{{end}}</code></td>
-          <td class="small">{{with .Changes}}{{if and (eq .Tracked 0) (eq .Untracked 0)}}clean{{else}}{{.Tracked}} tracked, {{.Untracked}} untracked{{end}}{{end}}</td>
-          <td class="small">{{range .Remotes}}{{.Name}} ({{.Role}}): {{if .Host}}{{.Host}}{{else}}local{{end}}<br>{{else}}<span class="muted">none</span>{{end}}</td>
-          {{else}}<td colspan="4" class="muted">&ndash;</td>{{end}}
-          {{end}}
-        </tr>
-      {{end}}
-      </tbody>
-    </table></div>
-    <p class="muted small">JSON: <a href="/api/projects/{{.Project.ID}}/assessment"><code>GET /api/projects/{{.Project.ID}}/assessment</code></a></p>
-  </section>
+  <p class="muted small">JSON: <a href="/api/projects/{{.Project.ID}}/assessment"><code>GET /api/projects/{{.Project.ID}}/assessment</code></a></p>
+  </div>
+  </main>
 </body>
 </html>
