@@ -58,6 +58,35 @@ func TestConfigAliases(t *testing.T) {
 	}
 }
 
+func TestRegistryMetadataAfterAtomicReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	if err := writeAtomic(path, []byte("schema_version: 1\n")); err != nil {
+		t.Fatal(err)
+	}
+	// Model Lstat observing the old inode just as its pathname is replaced.
+	info, err := old.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Sys().(*syscall.Stat_t).Nlink != 0 {
+		t.Fatal("old registry inode is still linked")
+	}
+	if err := regularFile(info, true); err != nil {
+		t.Fatalf("registration path rejected stale metadata: %v", err)
+	}
+	if err := regularFile(info, false); err == nil {
+		t.Fatal("lock validation accepted an unlinked inode")
+	}
+}
+
 func TestLockSurvivesAtomicReplacementAndTimesOut(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "config.yaml")

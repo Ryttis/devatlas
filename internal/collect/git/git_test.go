@@ -22,15 +22,21 @@ func requireGit(t *testing.T) string {
 	return p
 }
 
-// run executes git in dir for test setup only.
-func run(t *testing.T, dir string, args ...string) string {
-	t.Helper()
+// setupGitCommand supplies an isolated identity for test setup commands.
+func setupGitCommand(dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.invalid",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.invalid",
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0",
 	)
+	return cmd
+}
+
+// run executes git in dir for test setup only.
+func run(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := setupGitCommand(dir, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -163,8 +169,20 @@ func TestConflictedAndDetached(t *testing.T) {
 	run(t, dir, "checkout", "-q", "main")
 	write(t, filepath.Join(dir, "f.txt"), "main\n")
 	commitAll(t, dir, "main")
-	if err := exec.Command("git", "-C", dir, "merge", "other").Run(); err == nil {
-		t.Fatal("merge should conflict")
+	out, err := setupGitCommand(dir, "merge", "other").CombinedOutput()
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Fatalf("merge should conflict with exit 1: %v\n%s", err, out)
+	}
+	t.Logf("merge output:\n%s", out)
+	// A failed command alone does not prove the conflict fixture was created.
+	unmerged := strings.Split(run(t, dir, "ls-files", "--unmerged"), "\n")
+	if len(unmerged) != 3 {
+		t.Fatalf("want three unmerged index stages for f.txt, got %q\n%s", unmerged, out)
+	}
+	for i, entry := range unmerged {
+		if !strings.HasSuffix(entry, " "+string(rune('1'+i))+"\tf.txt") {
+			t.Fatalf("unexpected unmerged index stage: %q\n%s", entry, out)
+		}
 	}
 	c, _ := newCollector(t, Options{})
 	repo := observeOK(t, c, dir)
@@ -453,8 +471,13 @@ func TestFailureIsolationAndOutputLimit(t *testing.T) {
 	if all[bad].Status != StatusError || all[bad].Reason != "git rev-parse exited with status 3" {
 		t.Errorf("bad: %+v", all[bad])
 	}
-	if !strings.Contains(logs.String(), "boom") {
-		t.Errorf("stderr should be logged, not shown: %s", logs.String())
+	if strings.Contains(logs.String(), "boom") {
+		t.Errorf("raw stderr must not be logged: %s", logs.String())
+	}
+	for _, want := range []string{"level=WARN", `msg="git command failed"`, "subcommand=rev-parse", "status=error", "exit=3", "stderr_bytes=11"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("safe warning should contain %q: %s", want, logs.String())
+		}
 	}
 
 	// Output beyond the limit fails the observation instead of truncating.
@@ -471,6 +494,93 @@ func TestFailureIsolationAndOutputLimit(t *testing.T) {
 	if obs := c3.Observe(context.Background(), good); obs.Status != StatusError || !strings.Contains(obs.Reason, "safe.directory") {
 		t.Fatalf("%+v", obs)
 	}
+}
+
+// assertNoMarker fails when a synthetic credential marker reached the log or
+// the serialised observation.
+func assertNoMarker(t *testing.T, obs Observation, logs, marker string) {
+	t.Helper()
+	js, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs, marker) {
+		t.Errorf("credential marker %q leaked into the log:\n%s", marker, logs)
+	}
+	if strings.Contains(string(js), marker) {
+		t.Errorf("credential marker %q leaked into the observation:\n%s", marker, js)
+	}
+}
+
+func assertLogContains(t *testing.T, logs string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(logs, want) {
+			t.Errorf("safe warning should contain %q:\n%s", want, logs)
+		}
+	}
+}
+
+func TestFailedCommandStderrIsNotLogged(t *testing.T) {
+	const marker = "SYNTHETIC-STDERR-CRED-0001"
+	// Git quotes the remote URL, credentials included, in its error messages.
+	stderr := "fatal: unable to access 'https://deploy:" + marker + "@git.example.invalid/acme/app.git/': boom"
+	script := fakeGit(t, `echo "`+stderr+`" >&2; exit 128`)
+	c, logs := newCollector(t, Options{GitPath: script})
+	obs := c.Observe(context.Background(), t.TempDir())
+
+	if obs.Status != StatusError || obs.Reason != "git rev-parse exited with status 128" || obs.Repository != nil {
+		t.Errorf("observation: %+v", obs)
+	}
+	assertNoMarker(t, obs, logs.String(), marker)
+	for _, fragment := range []string{"deploy", "git.example.invalid", "unable to access", "boom"} {
+		if strings.Contains(logs.String(), fragment) {
+			t.Errorf("raw stderr fragment %q was logged:\n%s", fragment, logs.String())
+		}
+	}
+	assertLogContains(t, logs.String(), "level=WARN", `msg="git command failed"`, "subcommand=rev-parse", "status=error", "exit=128", "stderr_bytes=")
+
+	// A classified failure keeps its public reason and still logs nothing raw.
+	dubious := fakeGit(t, `echo "fatal: detected dubious ownership in repository at '/srv/`+marker+`'" >&2; exit 128`)
+	c2, logs2 := newCollector(t, Options{GitPath: dubious})
+	obs = c2.Observe(context.Background(), t.TempDir())
+	if obs.Status != StatusError || obs.Reason != "repository is owned by another user; see git config safe.directory" {
+		t.Errorf("classified observation: %+v", obs)
+	}
+	assertNoMarker(t, obs, logs2.String(), marker)
+	assertLogContains(t, logs2.String(), "level=WARN", `msg="git command failed"`, "subcommand=rev-parse", "exit=128")
+}
+
+func TestMalformedGitOutputIsNotLogged(t *testing.T) {
+	const marker = "SYNTHETIC-PARSE-CRED-0002"
+	// The collector passes seven global arguments before the subcommand.
+	// The marker starts the record so it survives the parser's truncation.
+
+	// status prints a record the parser rejects and would quote.
+	badStatus := fakeGit(t, `case "$8" in
+rev-parse) printf '/x\n/x/.git\n/x/.git\n';;
+status) printf '# branch.oid 0123456789abcdef0123456789abcdef01234567\0`+marker+`@git.example.invalid\0';;
+esac`)
+	c, logs := newCollector(t, Options{GitPath: badStatus})
+	obs := c.Observe(context.Background(), t.TempDir())
+	if obs.Status != StatusError || obs.Reason != "git output could not be interpreted" || obs.Repository != nil {
+		t.Errorf("status observation: %+v", obs)
+	}
+	assertNoMarker(t, obs, logs.String(), marker)
+	if strings.Contains(logs.String(), "git.example.invalid") || strings.Contains(logs.String(), "record") {
+		t.Errorf("parser error text was logged:\n%s", logs.String())
+	}
+	assertLogContains(t, logs.String(), "level=WARN", `msg="git output could not be interpreted"`, "subcommand=status", "status=error", "output_bytes=")
+
+	// rev-parse prints the wrong number of lines.
+	badLayout := fakeGit(t, `printf 'https://deploy:`+marker+`@git.example.invalid/acme/app.git\n'`)
+	c2, logs2 := newCollector(t, Options{GitPath: badLayout})
+	obs = c2.Observe(context.Background(), t.TempDir())
+	if obs.Status != StatusError || obs.Reason != "git output could not be interpreted" || obs.Repository != nil {
+		t.Errorf("rev-parse observation: %+v", obs)
+	}
+	assertNoMarker(t, obs, logs2.String(), marker)
+	assertLogContains(t, logs2.String(), "level=WARN", `msg="git output could not be interpreted"`, "subcommand=rev-parse", "status=error", "output_bytes=")
 }
 
 func TestEnvironmentCannotRedirectGit(t *testing.T) {

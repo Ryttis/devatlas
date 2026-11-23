@@ -14,7 +14,9 @@ import (
 )
 
 // commandError carries a classified failure of one git command. reason is
-// safe to show; stderr is for logs only.
+// safe to show. stderr is raw command output that may contain credentials:
+// it is used for classification only and must never be logged or shown; the
+// log records its length.
 type commandError struct {
 	subcommand string
 	status     Status

@@ -44,9 +44,11 @@ internal/assess              pure status rules, AI adapter with answer
 internal/config              .env parsing into a structure; Secret type
 internal/atomicfile          temp file + rename for assessment records
 internal/httpserver          loopback listener, timeouts, graceful shutdown,
-                             GET /health, GET /api/projects, GET / and
-                             GET /projects/{id} (html/template), the two guarded
-                             POST endpoints that queue assessments;
+                             GET /health, GET /api/projects, the project dashboard
+                             (GET / and GET /projects), GET /projects/{id},
+                             GET /assessments, GET /instance, the read-only agent
+                             console (GET /runs, GET /runs/{id}), all html/template,
+                             and the two guarded POST endpoints that queue assessments;
                              ObserveProjects joins registrations with observations
 internal/version             version string, VCS commit from Go build info
 ```
@@ -130,7 +132,9 @@ module is `go.yaml.in/yaml/v3`, used solely by `registryfile`. The
   redirecting environment variables, bounds time, output, and concurrency,
   kills the process group on cancellation, and sanitises remote URLs before
   they enter the observation. Failure reasons shown to users are classified
-  text; raw stderr goes to the log only. It never fetches, checks out,
+  text. Git stderr helps classify command failures. Logs contain only safe
+  diagnostic metadata; raw stderr and parser excerpts are excluded from logs
+  and responses. It never fetches, checks out,
   stages, commits, or edits configuration, and it never groups projects by
   remote.
 
@@ -265,3 +269,11 @@ exclusion is asserted on the JSON, the HTML, and the log. Later slices add
 tests for port-conflict logic and status and staleness modelling, using
 controlled fixtures for Docker, plus at least one flow verified against a
 real local project.
+
+## Execution console
+
+The read-only execution console at `/` and `/runs` projects bounded runner
+and workflow state files through `internal/runhistory`. It does not invoke
+collectors or agents. Detail pages expose validated reviewer/tester prose and
+workflow links; the Git inventory remains at `/projects`. See
+[AGENT_CONSOLE.md](AGENT_CONSOLE.md) for evidence semantics and file boundaries.

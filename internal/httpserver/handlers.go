@@ -101,6 +101,7 @@ func CurrentScope() Scope {
 			"GET /api/projects (read-only), the project dashboard, and project detail pages, reloaded from the file on every request",
 			"read-only Git observation per checkout, collected for each request by running the local git command: worktree root, branch or detached HEAD, commit, change counts, sanitised remotes",
 			"ahead/behind counts against the branch upstream and the remote default branch, based on last fetched refs only (DevAtlas never fetches)",
+			"read-only agent execution console at /runs (saved runner state; nothing can be started from the UI)",
 			"technology status assessment runs (freshness and known vulnerabilities of declared technologies and locked dependencies)",
 		},
 		Deferred: []string{
@@ -124,8 +125,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /projects/{id}", s.handleProject)
 	mux.HandleFunc("POST /projects/{id}/assess", s.handleAssess)
 	mux.HandleFunc("POST /assess-all", s.handleAssessAll)
-	// /runs is reserved for the agent execution console, which lives on
-	// another branch; the assessment table must not take that path.
+	// /runs belongs to the read-only agent execution console; the
+	// technology assessments have their own path.
+	mux.HandleFunc("GET /runs", s.handleRuns)
+	mux.HandleFunc("GET /runs/{id}", s.handleRun)
 	mux.HandleFunc("GET /assessments", s.handleAssessments)
 	mux.HandleFunc("GET /projects", s.handleHome)
 	mux.HandleFunc("GET /instance", s.handleInstance)

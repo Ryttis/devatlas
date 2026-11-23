@@ -203,9 +203,12 @@ func TestDashboardFlowTableRefreshResultCard(t *testing.T) {
 	if strings.Contains(dashboard, "🟢") || strings.Contains(dashboard, "🔴") {
 		t.Error("a project that was never assessed must not show an assessment status")
 	}
-	// /runs belongs to the agent execution console and is not served here.
-	if code, _ := d.get("/runs"); code != http.StatusNotFound {
-		t.Errorf("/runs must not be repurposed by this branch: %d", code)
+	// /runs stays the agent execution console, not the assessment table.
+	if code, runs := d.get("/runs"); code != http.StatusOK || !strings.Contains(runs, "Vykdymų konsolė") || strings.Contains(runs, "Atnaujinti visus") {
+		t.Errorf("/runs must remain the agent execution console: %d", code)
+	}
+	if code, _ := d.get("/runs/run-missing"); code != http.StatusNotFound {
+		t.Errorf("unknown run detail: %d", code)
 	}
 	if code, alias := d.get("/projects"); code != http.StatusOK || !strings.Contains(alias, "Demo Project") {
 		t.Errorf("/projects must serve the dashboard: %d", code)

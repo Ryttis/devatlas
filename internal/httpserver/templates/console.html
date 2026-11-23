@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="lt">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{if .Detail}}{{.Detail.Entry.ID}} · {{end}}DevAtlas — vykdymų konsolė</title>
+<style>
+:root {
+  color-scheme:dark;
+  font-family:system-ui,-apple-system,sans-serif;
+  color:#e7edf3;
+  background:#10161d;
+  line-height:1.5}
+
+* {
+  box-sizing:border-box}
+body {
+  margin:0}
+a {
+  color:#93ddce;
+  text-decoration:none}
+a:hover {
+  text-decoration:underline}
+a:focus-visible {
+  outline:2px solid #93ddce;
+  outline-offset:5px}
+header {
+  border-bottom:1px solid #2c3844;
+  background:#151d26}
+nav,main {
+  max-width:1180px;
+  margin:auto;
+  padding:22px 28px}
+nav {
+  display:flex;
+  align-items:center;
+  gap:28px}
+nav .brand {
+  font-weight:750;
+  color:#f4f7fa;
+  font-size:20px;
+  margin-right:auto}
+.brand span {
+  color:#84dbc7}
+nav a {
+  font-size:14px}
+main {
+  padding-top:40px;
+  padding-bottom:64px}
+h1 {
+  font-size:clamp(25px,4vw,36px);
+  line-height:1.2;
+  margin:10px 0 14px;
+  overflow-wrap:anywhere;
+  letter-spacing:-.03em}
+h2 {
+  font-size:19px;
+  margin:0 0 16px}
+.eyebrow {
+  font-size:12px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:#93a5b6}
+.muted,small {
+  color:#a1b0bf}
+.intro {
+  max-width:760px;
+  margin-bottom:26px}
+.heading {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px}
+.button {
+  border:1px solid #405568;
+  padding:9px 15px;
+  border-radius:7px;
+  font-size:14px;
+  white-space:nowrap}
+.stats {
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:14px;
+  margin:30px 0}
+.stat,.panel {
+  border:1px solid #2c3844;
+  background:#151e28;
+  border-radius:10px}
+.stat {
+  padding:18px 20px}
+.stat strong {
+  display:block;
+  font-size:29px;
+  font-weight:650;
+  margin-top:4px}
+.stat span {
+  font-size:13px;
+  color:#a1b0bf}
+.panel {
+  padding:23px;
+  margin:22px 0}
+.filters {
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-bottom:18px}
+.filters a {
+  padding:7px 14px;
+  border-radius:6px;
+  border:1px solid #334353;
+  font-size:14px}
+.filters a[aria-current=page] {
+  background:#25483f;
+  color:#d1fff0;
+  border-color:#578b7b}
+.table-wrap {
+  overflow-x:auto}
+table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:14px;
+  text-align:left}
+th {
+  font-size:11px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  font-weight:550;
+  color:#91a5b8;
+  background:#192430}
+th,td {
+  padding:16px;
+  border-bottom:1px solid #2c3844;
+  vertical-align:top}
+td:first-child {
+  min-width:185px}
+tbody tr:last-child td {
+  border-bottom:0}
+.list-panel {
+  padding:0;
+  overflow:hidden}
+.badge {
+  display:inline-block;
+  padding:4px 9px;
+  border-radius:5px;
+  font-family:ui-monospace,monospace;
+  font-size:12px;
+  white-space:nowrap;
+  background:#283748;
+  color:#cfdae8}
+.good {
+  background:#1d4035;
+  color:#9aebc5}
+.bad {
+  background:#472c29;
+  color:#ffc0af}
+.wait {
+  background:#443c24;
+  color:#f2dc94}
+code {
+  font-size:.9em;
+  overflow-wrap:anywhere}
+.time {
+  white-space:nowrap;
+  font-size:12px;
+  color:#a1b0bf}
+.note {
+  border-left:3px solid #d4b66a;
+  padding:12px 16px;
+  background:#29291f;
+  border-radius:3px;
+  font-size:14px;
+  margin:18px 0}
+.empty {
+  padding:46px 26px;
+  text-align:center}
+.empty h2 {
+  margin-bottom:10px}
+.pagination {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin:20px 0;
+  gap:20px;
+  font-size:14px}
+.meta {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:22px}
+.meta dt {
+  font-size:12px;
+  color:#a1b0bf;
+  margin-bottom:6px}
+.meta dd {
+  margin:0;
+  overflow-wrap:anywhere}
+.report {
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  line-height:1.7}
+.findings {
+  padding-left:22px}
+.findings li {
+  padding:8px 0;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere}
+footer {
+  border-top:1px solid #2c3844;
+  margin-top:36px;
+  padding-top:18px;
+  font-size:12px;
+  color:#90a2b3}
+.back {
+  font-size:14px}
+.report-title {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:16px}
+.report-title h2 {
+  margin:0}
+
+@media(max-width:650px) {
+  nav,main {
+  padding-left:18px;
+  padding-right:18px}
+nav {
+  gap:17px}
+.stats {
+  grid-template-columns:repeat(2,1fr);
+  gap:10px}
+.stat {
+  padding:14px}
+.heading {
+  align-items:flex-start;
+  flex-direction:column;
+  gap:4px}
+.meta {
+  grid-template-columns:1fr}
+.panel {
+  padding:18px}
+.list-panel {
+  padding:0}
+th,td {
+  padding:13px}
+main {
+  padding-top:28px}
+.report-title {
+  align-items:flex-start;
+  flex-direction:column}
+}
+</style>
+</head>
+<body>
+<header><nav aria-label="Pagrindinis"><a class="brand" href="/">Dev<span>Atlas</span></a><a href="/runs">Vykdymai</a><a href="/projects">Projektai</a><a href="/health">Health</a></nav></header>
+<main>
+{{if .Detail}}{{with .Detail}}
+<a class="back" href="/runs">← Visi vykdymai</a>
+<div class="heading"><div><p class="eyebrow">{{if eq .Entry.Kind "workflow"}}Bendra užduotis{{else}}Agento vykdymas{{end}}</p><h1>{{.Entry.ID}}</h1></div><a class="button" href="{{.Entry.URL}}">Atnaujinti</a></div>
+<p><span class="badge {{.Entry.Tone}}">{{.Entry.Stage}}</span></p>
+{{if not .Entry.Terminal}}<p class="note">Tai paskutinė įrašyta būsena. Ji nepatvirtina, kad procesas šiuo metu veikia.</p>{{end}}
+<section class="panel" aria-label="Vykdymo duomenys"><dl class="meta">
+<div><dt>Būsena įrašyta</dt><dd>{{stamp .Entry.UpdatedAt}}</dd></div>
+<div><dt>Go patikros</dt><dd>{{if eq .Entry.GoChecks "passed"}}Praėjo pagal runnerio etapą{{else}}Nepatvirtinta šiame įraše{{end}}</dd></div>
+<div><dt>Pradinis commit</dt><dd><code>{{if .Entry.Base}}{{.Entry.Base}}{{else}}Nenurodytas{{end}}</code></dd></div>
+<div><dt>Kandidato commit</dt><dd><code>{{if .Entry.Head}}{{.Entry.Head}}{{else}}Nenurodytas{{end}}</code></dd></div>
+{{if .Entry.FailedStage}}<div><dt>Nutrūko etape</dt><dd>{{.Entry.FailedStage}}</dd></div>{{end}}
+{{if eq .Entry.Kind "workflow"}}<div><dt>Reviewerio būsena</dt><dd>{{.Entry.Review}}</dd></div><div><dt>Testerio būsena</dt><dd>{{.Entry.Tester}}</dd></div>{{end}}
+</dl></section>
+{{if eq .Entry.Kind "workflow"}}
+<h2>Vykdymų bandymai</h2>
+<div class="panel list-panel"><div class="table-wrap"><table><thead><tr><th>Dalis</th><th>Bandymas</th><th>Vykdymas</th><th>Review</th><th>Commit</th></tr></thead><tbody>
+{{range .Entry.Attempts}}<tr><td>{{.Slice}}</td><td>{{if .Attempt}}{{.Attempt}}{{else}}—{{end}}</td><td><a href="/runs/{{.RunID}}"><code>{{.RunID}}</code></a></td><td>{{.Review}}</td><td><code>{{short .Head}}</code></td></tr>{{else}}<tr><td colspan="5">Susietų vykdymų dar nėra.</td></tr>{{end}}
+</tbody></table></div></div><p class="muted">Atidarykite vykdymą, kad matytumėte reviewerio pastabas ir testerio išvadą.</p>
+{{end}}
+{{range .Reports}}<section class="panel"><div class="report-title"><h2>{{.Name}}</h2><span class="badge">{{.Verdict}}</span></div>
+{{if .Unavailable}}<p class="note">Ataskaita nepasiekiama, netinkama arba nesutampa su būsena. Išvada nepatvirtinta.</p>{{else if .Summary}}<p class="report">{{.Summary}}</p>{{if .Findings}}<h3>Pastabos</h3><ul class="findings">{{range .Findings}}<li>{{.}}</li>{{end}}</ul>{{end}}{{else}}<p class="muted">Patvirtintos ataskaitos dar nėra.</p>{{end}}
+</section>{{end}}
+{{end}}{{else}}
+<div class="heading"><div><p class="eyebrow">Agentų darbo eiga</p><h1>Vykdymų konsolė</h1></div><a class="button" href="/runs?kind={{.Kind}}&amp;page={{.Page}}">Atnaujinti</a></div>
+<p class="intro muted">Užduotys, vykdymų būsenos ir peržiūros pastabos vienoje vietoje. Pasirinkite įrašą, kad pamatytumėte jo rezultatą.</p>
+<div class="stats"><div class="stat"><span>Perskaityti įrašai</span><strong>{{.Total}}</strong></div><div class="stat"><span>Praėjo</span><strong>{{.Passed}}</strong></div><div class="stat"><span>Reikia dėmesio</span><strong>{{.Attention}}</strong></div><div class="stat"><span>Kiti etapai</span><strong>{{.Other}}</strong></div></div>
+{{range .Warnings}}<p class="note">{{.}}</p>{{end}}{{if .Unavailable}}<p class="note">Neparodyti {{.Unavailable}} neperskaitomi arba netinkami įrašai. Sąrašas nepilnas.</p>{{end}}
+<div class="filters" aria-label="Įrašų tipas"><a href="/runs" {{if eq .Kind ""}}aria-current="page"{{end}}>Visi</a><a href="/runs?kind=workflow" {{if eq .Kind "workflow"}}aria-current="page"{{end}}>Užduotys</a><a href="/runs?kind=run" {{if eq .Kind "run"}}aria-current="page"{{end}}>Atskiri vykdymai</a></div>
+<div class="panel list-panel">{{if .Entries}}<div class="table-wrap"><table><thead><tr><th>Įrašas</th><th>Būsena</th><th>Tipas</th><th>Kandidato commit</th><th>Būsena įrašyta</th></tr></thead><tbody>
+{{range .Entries}}<tr><td><a href="{{.URL}}"><code>{{.ID}}</code></a></td><td><span class="badge {{.Tone}}">{{.Stage}}</span></td><td>{{if eq .Kind "workflow"}}Užduotis{{else}}Vykdymas{{end}}</td><td><code>{{short .Head}}</code></td><td class="time">{{stamp .UpdatedAt}}</td></tr>{{end}}
+</tbody></table></div>{{else}}<div class="empty"><h2>Vykdymų dar nėra</h2><p class="muted">Pasirinktame sąraše nėra perskaitytų įrašų. Paleistos užduotys atsiras atnaujinus puslapį.</p><p class="muted">Jei vykdymų tikitės, patikrinkite serverio <code>-state-dir</code> ir failų skaitymo teises.</p></div>{{end}}</div>
+<div class="pagination"><span>{{.Page}} / {{.Pages}} puslapis · iki 50 įrašų</span><span>{{if .Previous}}<a href="/runs?kind={{.Kind}}&amp;page={{.Previous}}">← Ankstesnis</a> &nbsp;{{end}}{{if .Next}}<a href="/runs?kind={{.Kind}}&amp;page={{.Next}}">Kitas →</a>{{end}}</span></div>
+<p class="muted">Būsenos skaitomos iš išsaugotų įrašų. Neužbaigtas etapas nepatvirtina, kad procesas vis dar veikia. Skaitikliai apima pasirinktą filtrą; užduotys ir jų vykdymai yra atskiri įrašai.</p>
+{{end}}
+<footer>Tik skaitymas · Atnaujinta {{stamp .Now}} · Įprasti slapti duomenys ataskaitose maskuojami; žurnalai ir komandų vykdymas čia neprieinami.</footer>
+</main></body></html>

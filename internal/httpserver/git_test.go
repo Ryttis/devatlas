@@ -92,7 +92,7 @@ func TestGitObservationsInAPIAndHTML(t *testing.T) {
 		t.Errorf("plain dir observation: %+v", p.Git)
 	}
 
-	code, html, _ := getBody(t, base+"/")
+	code, html, _ := getBody(t, base+"/projects")
 	if code != http.StatusOK {
 		t.Fatalf("home status %d", code)
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Ryttis/devatlas/internal/assess"
 	"github.com/Ryttis/devatlas/internal/collect/git"
+	"github.com/Ryttis/devatlas/internal/runhistory"
 	"github.com/Ryttis/devatlas/internal/version"
 )
 
@@ -25,6 +26,7 @@ type Server struct {
 	git      GitObserver
 	http     *http.Server
 	started  time.Time
+	history  runhistory.Store
 	// assess is nil when the technology status dashboard is not enabled.
 	assess *assess.Service
 	// allowedHosts are the Host header values that name this listener; set
@@ -46,6 +48,15 @@ func New(cfg Config, src RegistrySource, log *slog.Logger) (*Server, error) {
 		log = slog.Default()
 	}
 	s := &Server{cfg: cfg, log: log, registry: src}
+	stateDir := cfg.StateDir
+	if stateDir == "" {
+		var err error
+		stateDir, err = runhistory.DefaultDir()
+		if err != nil {
+			return nil, err
+		}
+	}
+	s.history = runhistory.Store{Dir: stateDir}
 	s.git = git.NewCollector(git.Options{Logger: log})
 	s.http = &http.Server{
 		Handler: s.routes(),

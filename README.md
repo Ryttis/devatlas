@@ -5,7 +5,11 @@ locally developed projects, their actual runtime status, and project context
 for the developer and AI coding agents. It targets Windows 11 + WSL2 and runs
 as one Go process inside WSL.
 
-**Current state: slice 04, technology status dashboard (first stage).**
+**Current state: project dashboard, technology status (slice 04), and the
+read-only agent execution console.**
+The home page is the project dashboard. Saved agent runs and workflows, with
+detail pages for reviewer findings and tester summaries, are at `/runs`; see
+[docs/AGENT_CONSOLE.md](docs/AGENT_CONSOLE.md) for state paths, limits and deployment.
 This build provides the `devatlas` CLI, a loopback-only HTTP server,
 persistent registration of existing project directories as checkouts of
 explicitly named projects, a read-only Git observation for each checkout, and
@@ -212,6 +216,7 @@ checkouts:
 | `-shutdown-timeout` | `10s`       | Time allowed for in-flight requests after SIGINT/SIGTERM. |
 | `-log-level`        | `info`      | `debug`, `info`, `warn`, or `error`.                      |
 | `-config`           | see above   | Registration file to serve.                               |
+| `-state-dir`        | XDG state directory | Absolute runner state root; independent of `-config`. |
 
 Exit codes: `0` success, `1` runtime failure (port already in use, duplicate
 directory, unknown checkout ID, malformed registration file), `2` invalid
@@ -279,8 +284,10 @@ conflicts on your machine.
 | Method and path | Response                                                  |
 | --------------- | --------------------------------------------------------- |
 | `GET /`, `GET /projects` | HTML project dashboard: one row per project with Domain, Health (always "Not checked": runtime checks are not implemented), the stored freshness and security assessments, Git, Runs from, and a link to the project page; explains registration when the registry is empty |
-| `GET /projects/{id}` | HTML project page: overview, every checkout with its Git state (branch, commit, default branch, uncommitted counts, ahead/behind, last fetch, remotes), then the assessment: statuses, assessed checkout, findings with evidence, sources and actions, technologies, dependencies |
-| `GET /assessments` | HTML technology assessments: the status table with the "Atnaujinti" controls. `/runs` is deliberately not used: it belongs to the agent execution console, which is not part of this branch |
+| `GET /projects/{id}` | HTML project page: overview, every checkout with its Git state (branch, commit, default branch, uncommitted counts, ahead/behind, FETCH_HEAD time, remotes), then the assessment: statuses, assessed checkout, findings with evidence, sources and actions, technologies, dependencies |
+| `GET /runs` | Agent execution console; `kind=run` or `kind=workflow`, `page=1` filters/pagination |
+| `GET /runs/{id}` | Saved state, commit IDs, reviewer findings, tester summary or linked workflow attempts |
+| `GET /assessments` | HTML technology assessments: the status table with the "Atnaujinti" controls |
 | `GET /instance` | HTML instance details: build version, runtime, bind address, registry path and status, implementation scope |
 | `GET /api/projects/{id}/assessment` | JSON: the stored assessment record (last successful result and last attempt); 404 before the first run |
 | `POST /projects/{id}/assess` | Queues an assessment of one checkout (form field `checkout`, optional); answers 303 to `/`, or to the page named by the form field `return` (`project`, `assessments`) |
@@ -452,9 +459,11 @@ may run for 10 seconds and all commands for one checkout for 20 seconds
 together; `list` additionally caps a whole run at 2 minutes. A command whose
 standard output exceeds 8 MiB fails the observation rather than being
 truncated. Git runs in its own process group and the whole group is killed on
-timeout or cancellation. Up to 2 KiB of a failed command's stderr is written
-to the server or CLI log; it is never part of a response. One checkout's
-failure never affects another's observation.
+timeout or cancellation. Git stderr helps classify command failures. Server
+and CLI logs contain only safe diagnostic metadata, such as the subcommand,
+status, exit code, and byte counts. Raw stderr and parser excerpts are never
+logged or returned in responses. One checkout's failure never affects
+another's observation.
 
 ## Technology status dashboard
 
